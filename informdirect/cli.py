@@ -323,7 +323,7 @@ def _cmd_authtest(args):
 
     if verdict == "working":
         best = result["shape"]
-        print(f"\nAuthentication works. Put this in config/settings.json:")
+        print("\nAuthentication works. Put this in config/settings.json:")
         print(f"  {best.settings_hint()}")
         if not best.refresh:
             print("  note: no refresh token came back - /refresh needs one, so "
