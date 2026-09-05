@@ -69,13 +69,26 @@ class ExportTest(unittest.TestCase):
 
 
 class EndpointMapTest(unittest.TestCase):
-    def test_shipped_map_loads_and_declares_the_operations_we_use(self):
+    def test_shipped_map_declares_the_documented_operations(self):
         endpoints = EndpointMap.load(REPO_ROOT / "config" / "endpoints.json")
-        for name in ("list_companies", "get_company", "list_officers",
-                     "list_shareholders"):
+        for name in ("list_companies", "get_company", "add_company",
+                     "remove_company"):
             self.assertTrue(endpoints.has(name), name)
         self.assertTrue(endpoints.is_provisional,
                         "shipped paths are unconfirmed and must say so")
+
+    def test_officers_and_shareholders_are_parked_not_silently_wired_up(self):
+        raw = json.loads((REPO_ROOT / "config" / "endpoints.json").read_text())
+        parked = raw["_not_offered_by_the_api"]
+        for name in ("list_officers", "list_shareholders", "list_filings"):
+            self.assertIn(name, parked)
+            self.assertNotIn(name, raw["operations"])
+
+    def test_asking_for_a_parked_operation_fails_loudly(self):
+        endpoints = EndpointMap.load(REPO_ROOT / "config" / "endpoints.json")
+        with self.assertRaises(EndpointNotConfigured) as ctx:
+            endpoints.get("list_officers")
+        self.assertIn("list_companies", str(ctx.exception))
 
     def test_resolve_substitutes_and_quotes(self):
         endpoints = EndpointMap.from_dict({

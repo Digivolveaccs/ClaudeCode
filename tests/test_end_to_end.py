@@ -61,7 +61,20 @@ PLANNER_CSV = """Company Number,Client Name,Year End,Accounts Due Date,Job Stage
 """
 
 
+ALL_COMPANIES = PAGE_1["items"] + PAGE_2["items"]
+
+
 def routed(method, url, headers=None, body=None):
+    # GET /companies/<id> - one company by Inform Direct id or company number.
+    path = url.split("?", 1)[0]
+    if "/companies/" in path and path.count("/companies/") == 1:
+        tail = path.rsplit("/companies/", 1)[1]
+        if "/" not in tail:
+            wanted = tail.lstrip("0")
+            for record in ALL_COMPANIES:
+                if record["id"] == tail or record["companyNumber"].lstrip("0") == wanted:
+                    return json_response(record)
+            return json_response({"message": "not found"}, status=404)
     if "/officers" in url:
         return json_response([{"name": "M Hunt", "role": "Director",
                                "appointedOn": "2019-04-01"}])
@@ -191,3 +204,85 @@ class EndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckCommandTest(unittest.TestCase):
+    """`check` must say plainly whether the planner's fields are present."""
+
+    def _run(self, page):
+        from informdirect.cli import main
+        from unittest import mock
+
+        portfolio = make_portfolio()
+        portfolio.client.transport = FakeTransport(
+            handler=lambda *a: json_response(page))
+        buffer = io.StringIO()
+        with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+            with redirect_stdout(buffer):
+                code = main(["check"])
+        return code, buffer.getvalue()
+
+    def test_reports_ok_when_the_deadline_fields_are_returned(self):
+        code, output = self._run({"items": [
+            {"companyNumber": "1234567", "companyName": "A Ltd",
+             "companyStatus": "Active", "nextAccountsMadeUpTo": "2025-03-31",
+             "accountsDueDate": "2025-12-31"}]})
+        self.assertEqual(code, 0)
+        self.assertIn("Everything the planner feed and reconciliation need", output)
+
+    def test_flags_the_planner_fields_the_api_does_not_return(self):
+        code, output = self._run({"items": [
+            {"companyNumber": "1234567", "companyName": "A Ltd",
+             "companyStatus": "Active"}]})
+        self.assertEqual(code, 2)
+        self.assertIn("accounts due date", output)
+        self.assertIn("NONE", output)
+        self.assertIn("raw", output, "must point at how to diagnose it")
+
+
+class ParkedOperationsTest(unittest.TestCase):
+    """Officers/shareholders are absent from the documented API - degrade, don't crash."""
+
+    def _portfolio_without_people(self):
+        endpoints = {
+            "_status": "test",
+            "operations": {
+                "list_companies": {"method": "GET", "path": "/companies"},
+                "get_company": {"method": "GET", "path": "/companies/{company_id}"},
+            },
+        }
+        settings = Settings.load(base_url="https://api.example.com/v1",
+                                 auth_mode="api_key", api_key="k", page_size=2,
+                                 backoff_base=0.0)
+        client = Client(settings, transport=FakeTransport(handler=routed),
+                        auth=StubAuth(),
+                        endpoints=EndpointMap.from_dict(endpoints, source="test"),
+                        sleep=lambda _: None)
+        return Portfolio(client=client)
+
+    def test_close_company_view_reports_unavailable_instead_of_raising(self):
+        portfolio = self._portfolio_without_people()
+        view = portfolio.close_company_view(portfolio.find_by_number("1234567"))
+        self.assertEqual(view["company"].company_number, "01234567")
+        self.assertIsNone(view["directors"])
+        self.assertIsNone(view["shareholders"])
+        self.assertIn("directors", view["unavailable"])
+        self.assertIn("list_companies", view["unavailable"]["directors"])
+
+    def test_none_and_empty_are_different_answers(self):
+        # The full portfolio DOES serve officers, so [] vs None stays meaningful.
+        view = make_portfolio().close_company_view("1234567")
+        self.assertEqual([o.name for o in view["directors"]], ["M Hunt"])
+        self.assertEqual(view["unavailable"], {})
+
+    def test_company_command_says_so_rather_than_crashing(self):
+        from informdirect.cli import main
+        from unittest import mock
+
+        buffer = io.StringIO()
+        with mock.patch("informdirect.cli._portfolio",
+                        return_value=self._portfolio_without_people()):
+            with redirect_stdout(buffer):
+                code = main(["company", "1234567"])
+        self.assertEqual(code, 0)
+        self.assertIn("not available from this API", buffer.getvalue())

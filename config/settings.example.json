@@ -1,19 +1,23 @@
 {
   "_comment": [
     "Copy to config/settings.json and fill in. That file is gitignored.",
-    "Every value here can also come from an environment variable:",
-    "INFORMDIRECT_BASE_URL, INFORMDIRECT_CLIENT_SECRET, and so on.",
-    "Prefer environment variables for the secrets on shared machines."
+    "Every value can also come from an environment variable:",
+    "INFORMDIRECT_BASE_URL, INFORMDIRECT_API_KEY, and so on.",
+    "Prefer environment variables for the key on shared machines.",
+    "",
+    "auth_mode 'api_key_token' is Inform Direct's documented flow: the API key",
+    "is POSTed to the auth endpoint for a 15-minute access token plus a refresh",
+    "token. Start with a sandbox key; apply for a production key when ready."
   ],
 
-  "base_url": "https://REPLACE-ME/v1",
-  "auth_mode": "oauth2",
+  "base_url": "https://REPLACE-ME",
+  "api_key": "",
 
-  "token_url": "https://REPLACE-ME/oauth2/token",
-  "client_id": "",
-  "client_secret": "",
-  "scope": "",
-  "token_auth_style": "auto",
+  "auth_mode": "api_key_token",
+  "auth_path": "/authenticate",
+  "refresh_path": "/refresh",
+  "api_key_field": "apiKey",
+  "api_key_in": "auto",
 
   "page_size": 100,
   "timeout": 30,

@@ -1,12 +1,43 @@
 {
   "_status": "provisional",
   "_note": [
-    "PROVISIONAL PATHS - not yet confirmed against the published Inform Direct",
-    "OpenAPI spec. Confirm or regenerate with:",
+    "Operation SET is taken from Inform Direct's published API description; the",
+    "PATHS below are still guesses, because the docs portal is unreachable from",
+    "the machine this was built on. Confirm/replace them with:",
     "    python3 scripts/fetch_spec.py --spec <openapi.json|url> --write",
-    "Every path below is only a default; nothing else in the package hardcodes a",
-    "URL, so correcting this file is all that is needed to point at the real API."
+    "Nothing else in the package hardcodes a URL, so this file is the whole job.",
+    "",
+    "Authentication is NOT listed here - it is config (auth_path '/authenticate',",
+    "refresh_path '/refresh'), because it is not a resource operation."
   ],
+  "_documented_capabilities": [
+    "Retrieve a full list of companies linked to your account",
+    "Retrieve high-level company details",
+    "Add a company to your account",
+    "Remove a company no longer in use"
+  ],
+  "_not_offered_by_the_api": {
+    "_why": [
+      "Inform Direct describes the Integration API as adding/removing companies",
+      "and retrieving HIGH-LEVEL company details. Officers, shareholders and",
+      "filing history are not part of that description, so the SA close-company",
+      "check cannot move off the browser yet. If a later version adds them, move",
+      "the entries below into 'operations' and they start working - the code for",
+      "them is already written and tested."
+    ],
+    "list_officers": {
+      "method": "GET",
+      "path": "/companies/{company_id}/officers"
+    },
+    "list_shareholders": {
+      "method": "GET",
+      "path": "/companies/{company_id}/shareholders"
+    },
+    "list_filings": {
+      "method": "GET",
+      "path": "/companies/{company_id}/filings"
+    }
+  },
   "_spec_source": null,
   "_generated_at": null,
   "pagination": {
@@ -23,27 +54,22 @@
     "list_companies": {
       "method": "GET",
       "path": "/companies",
-      "description": "Every company in the portfolio."
+      "description": "Every company linked to the account."
     },
     "get_company": {
       "method": "GET",
       "path": "/companies/{company_id}",
-      "description": "One company by its Inform Direct id or company number."
+      "description": "High-level details for one company."
     },
-    "list_officers": {
-      "method": "GET",
-      "path": "/companies/{company_id}/officers",
-      "description": "Directors and secretaries, current and resigned."
+    "add_company": {
+      "method": "POST",
+      "path": "/companies",
+      "description": "Link a company to the account."
     },
-    "list_shareholders": {
-      "method": "GET",
-      "path": "/companies/{company_id}/shareholders",
-      "description": "Shareholdings, used for the close-company look-through."
-    },
-    "list_filings": {
-      "method": "GET",
-      "path": "/companies/{company_id}/filings",
-      "description": "Filing history - what has actually been submitted."
+    "remove_company": {
+      "method": "DELETE",
+      "path": "/companies/{company_id}",
+      "description": "Unlink a company no longer in use."
     }
   }
 }

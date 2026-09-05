@@ -171,3 +171,161 @@ class BuildAuthTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def key_settings(**kw):
+    base = dict(base_url="https://api.example.com/v1", api_key="sandbox-key",
+                cache_tokens=False)
+    base.update(kw)
+    return Settings.load(**base)
+
+
+class ApiKeyTokenAuthTest(unittest.TestCase):
+    """Inform Direct's documented flow: key -> access token (15 min) + refresh."""
+
+    def _auth(self, transport, clock=None, **kw):
+        from informdirect.auth import ApiKeyTokenAuth
+        return ApiKeyTokenAuth(key_settings(**kw), transport=transport,
+                               clock=clock or Clock())
+
+    def test_api_key_is_posted_as_json_to_the_auth_endpoint(self):
+        import json as _json
+        transport = FakeTransport([json_response(
+            {"accessToken": "a1", "refreshToken": "r1", "expiresIn": 900})])
+        auth = self._auth(transport, api_key_in="body")
+        self.assertEqual(auth.token(), "a1")
+        call = transport.calls[0]
+        self.assertEqual(call["method"], "POST")
+        self.assertEqual(call["url"], "https://api.example.com/v1/authenticate")
+        self.assertEqual(_json.loads(call["body"]), {"apiKey": "sandbox-key"})
+
+    def test_header_style_and_auto_fallback(self):
+        transport = FakeTransport([
+            json_response({"message": "bad request"}, status=400),
+            json_response({"accessToken": "a1"}),
+        ])
+        auth = self._auth(transport, api_key_in="auto")
+        self.assertEqual(auth.token(), "a1")
+        self.assertEqual(transport.calls[1]["headers"]["X-Api-Key"], "sandbox-key")
+
+    def test_default_ttl_is_fifteen_minutes_when_unstated(self):
+        clock = Clock()
+        transport = FakeTransport([
+            json_response({"accessToken": "a1", "refreshToken": "r1"}),
+            json_response({"accessToken": "a2", "refreshToken": "r2"}),
+        ])
+        auth = self._auth(transport, clock=clock, api_key_in="body")
+        self.assertEqual(auth.token(), "a1")
+        clock.now += 700          # inside 900 - 60 skew
+        self.assertEqual(auth.token(), "a1")
+        self.assertEqual(len(transport.calls), 1)
+        clock.now += 200          # past it
+        self.assertEqual(auth.token(), "a2")
+
+    def test_expiry_uses_the_refresh_endpoint_not_the_api_key(self):
+        import json as _json
+        clock = Clock()
+        transport = FakeTransport([
+            json_response({"accessToken": "a1", "refreshToken": "r1",
+                           "expiresIn": 900}),
+            json_response({"accessToken": "a2", "refreshToken": "r2",
+                           "expiresIn": 900}),
+        ])
+        auth = self._auth(transport, clock=clock, api_key_in="body")
+        auth.token()
+        clock.now += 900
+        self.assertEqual(auth.token(), "a2")
+        second = transport.calls[1]
+        self.assertEqual(second["url"], "https://api.example.com/v1/refresh")
+        self.assertEqual(_json.loads(second["body"]), {"refreshToken": "r1"})
+
+    def test_rotated_refresh_token_is_carried_forward(self):
+        import json as _json
+        clock = Clock()
+        transport = FakeTransport([
+            json_response({"accessToken": "a1", "refreshToken": "r1", "expiresIn": 60}),
+            json_response({"accessToken": "a2", "refreshToken": "r2", "expiresIn": 60}),
+            json_response({"accessToken": "a3", "refreshToken": "r3", "expiresIn": 60}),
+        ])
+        auth = self._auth(transport, clock=clock, api_key_in="body")
+        auth.token()
+        clock.now += 60
+        auth.token()
+        clock.now += 60
+        auth.token()
+        # Each refresh must send the token the previous response returned.
+        self.assertEqual(_json.loads(transport.calls[1]["body"])["refreshToken"], "r1")
+        self.assertEqual(_json.loads(transport.calls[2]["body"])["refreshToken"], "r2")
+
+    def test_a_rejected_refresh_falls_back_to_the_api_key(self):
+        clock = Clock()
+        transport = FakeTransport([
+            json_response({"accessToken": "a1", "refreshToken": "r1", "expiresIn": 60}),
+            json_response({"message": "refresh token revoked"}, status=401),
+            json_response({"accessToken": "a2", "refreshToken": "r2", "expiresIn": 60}),
+        ])
+        auth = self._auth(transport, clock=clock, api_key_in="body")
+        auth.token()
+        clock.now += 60
+        self.assertEqual(auth.token(), "a2")
+        self.assertEqual(transport.calls[2]["url"],
+                         "https://api.example.com/v1/authenticate")
+
+    def test_invalidate_keeps_the_refresh_token(self):
+        transport = FakeTransport([
+            json_response({"accessToken": "a1", "refreshToken": "r1"}),
+            json_response({"accessToken": "a2", "refreshToken": "r2"}),
+        ])
+        auth = self._auth(transport, api_key_in="body")
+        auth.token()
+        self.assertTrue(auth.invalidate())
+        self.assertEqual(auth.token(), "a2")
+        self.assertEqual(transport.calls[1]["url"],
+                         "https://api.example.com/v1/refresh")
+
+    def test_token_fields_are_matched_whatever_the_casing_or_nesting(self):
+        for payload in (
+            {"access_token": "a1", "refresh_token": "r1", "expires_in": 900},
+            {"accessToken": "a1", "refreshToken": "r1"},
+            {"data": {"token": "a1", "refresh": "r1"}},
+        ):
+            with self.subTest(payload=payload):
+                transport = FakeTransport([json_response(payload)])
+                self.assertEqual(self._auth(transport, api_key_in="body").token(), "a1")
+
+    def test_a_response_without_a_token_is_an_auth_error(self):
+        transport = FakeTransport([json_response({"status": "ok"})])
+        with self.assertRaises(AuthError) as ctx:
+            self._auth(transport, api_key_in="body").token()
+        self.assertIn("no access token", str(ctx.exception))
+
+    def test_failed_authentication_reports_the_api_message(self):
+        transport = FakeTransport([json_response({"message": "invalid api key"}, 401)])
+        with self.assertRaises(AuthError) as ctx:
+            self._auth(transport, api_key_in="body").token()
+        self.assertIn("invalid api key", str(ctx.exception))
+
+    def test_refresh_token_survives_across_processes_via_the_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cache.json"
+            settings = key_settings(cache_tokens=True, token_cache_path=str(path),
+                                    api_key_in="body")
+            clock = Clock()
+            from informdirect.auth import ApiKeyTokenAuth
+
+            first = ApiKeyTokenAuth(settings, transport=FakeTransport(
+                [json_response({"accessToken": "a1", "refreshToken": "r1",
+                                "expiresIn": 900})]), clock=clock)
+            first.token()
+
+            # New process, access token expired: must refresh, not re-authenticate.
+            clock.now += 900
+            transport = FakeTransport([json_response(
+                {"accessToken": "a2", "refreshToken": "r2", "expiresIn": 900})])
+            second = ApiKeyTokenAuth(settings, transport=transport, clock=clock)
+            self.assertEqual(second.token(), "a2")
+            self.assertTrue(transport.calls[0]["url"].endswith("/refresh"))
+
+    def test_build_auth_defaults_to_this_flow(self):
+        from informdirect.auth import ApiKeyTokenAuth
+        self.assertIsInstance(build_auth(key_settings()), ApiKeyTokenAuth)

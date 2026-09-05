@@ -39,8 +39,34 @@ class Settings:
     """OAuth2 token endpoint. Required when auth_mode == 'oauth2'."""
 
     # --- credentials ------------------------------------------------------
-    auth_mode: str = "oauth2"
-    """'oauth2' (client credentials) or 'api_key'."""
+    auth_mode: str = "api_key_token"
+    """How to authenticate. Inform Direct's documented flow is 'api_key_token'.
+
+    api_key_token - POST the API key to the auth endpoint for a short-lived
+                    access token plus a refresh token (the documented flow: the
+                    access token lasts 15 minutes, and /refresh is used when a
+                    request comes back 401)
+    api_key       - send a static key in a header on every request
+    oauth2        - RFC 6749 client-credentials grant
+    """
+
+    # api_key_token settings. Paths are appended to base_url unless the *_url
+    # forms are set outright.
+    auth_path: str = "/authenticate"
+    refresh_path: str = "/refresh"
+    auth_url: str = ""
+    refresh_url: str = ""
+    api_key_field: str = "apiKey"
+    """JSON field the API key is sent under when authenticating."""
+
+    refresh_token_field: str = "refreshToken"
+    """JSON field the refresh token is sent under, and read back from."""
+
+    api_key_in: str = "auto"
+    """Where the API key goes on the auth request: 'body', 'header' or 'auto'."""
+
+    access_token_ttl: float = 900.0
+    """Fallback token lifetime when the response does not say. Docs: 15 minutes."""
 
     client_id: str = ""
     client_secret: str = ""
@@ -54,7 +80,10 @@ class Settings:
     """
 
     api_key: str = ""
+    """Sandbox or production key from Inform Direct."""
+
     api_key_header: str = "X-Api-Key"
+    """Header name used by auth_mode 'api_key', and by api_key_in 'header'."""
 
     # --- behaviour --------------------------------------------------------
     timeout: float = 30.0
@@ -118,6 +147,9 @@ class Settings:
         self.token_url = (self.token_url or "").strip()
         self.auth_mode = (self.auth_mode or "oauth2").strip().lower()
         self.token_auth_style = (self.token_auth_style or "auto").strip().lower()
+        self.api_key_in = (self.api_key_in or "auto").strip().lower()
+        self.auth_url = (self.auth_url or "").strip()
+        self.refresh_url = (self.refresh_url or "").strip()
         self.timeout = float(self.timeout)
         self.max_retries = int(self.max_retries)
         self.page_size = int(self.page_size)
@@ -133,7 +165,24 @@ class Settings:
         if not self.base_url.startswith(("http://", "https://")):
             raise ConfigError(f"base_url must be an absolute URL, got {self.base_url!r}")
 
-        if self.auth_mode == "oauth2":
+        if self.auth_mode == "api_key_token":
+            if not self.api_key:
+                raise ConfigError(
+                    "auth_mode is 'api_key_token' but api_key is unset. Create a "
+                    "sandbox key in Inform Direct, then set "
+                    f"{ENV_PREFIX}API_KEY or api_key in config/settings.json."
+                )
+            if not (self.auth_url or self.auth_path):
+                raise ConfigError(
+                    "api_key_token needs either auth_url or auth_path (default "
+                    "'/authenticate')."
+                )
+            if self.api_key_in not in ("body", "header", "auto"):
+                raise ConfigError(
+                    "api_key_in must be 'body', 'header' or 'auto', got "
+                    f"{self.api_key_in!r}"
+                )
+        elif self.auth_mode == "oauth2":
             missing = [
                 name
                 for name in ("token_url", "client_id", "client_secret")
@@ -162,9 +211,16 @@ class Settings:
                 raise ConfigError("api_key_header must not be empty")
         else:
             raise ConfigError(
-                f"auth_mode must be 'oauth2' or 'api_key', got {self.auth_mode!r}"
+                "auth_mode must be 'api_key_token', 'api_key' or 'oauth2', got "
+                f"{self.auth_mode!r}"
             )
         return self
+
+    def resolved_auth_url(self):
+        return self.auth_url or (self.base_url + self.auth_path)
+
+    def resolved_refresh_url(self):
+        return self.refresh_url or (self.base_url + self.refresh_path)
 
     def redacted(self):
         """A dict safe to print or log - secrets replaced with a mask."""
@@ -205,7 +261,8 @@ def _resolve_config_path(explicit=None):
 
 
 _BOOL_FIELDS = {"cache_tokens"}
-_FLOAT_FIELDS = {"timeout", "backoff_base", "backoff_cap"}
+_FLOAT_FIELDS = {"timeout", "backoff_base", "backoff_cap",
+                 "access_token_ttl"}
 _INT_FIELDS = {"max_retries", "page_size"}
 
 

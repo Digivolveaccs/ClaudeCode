@@ -34,8 +34,27 @@ class SettingsTest(unittest.TestCase):
             Settings.load(basurl="https://x")
         self.assertIn("basurl", str(ctx.exception))
 
-    def test_validate_lists_every_missing_oauth_field(self):
+    def test_default_auth_mode_is_the_documented_inform_direct_flow(self):
+        s = Settings.load(base_url="https://api.example.com", api_key="k")
+        self.assertEqual(s.auth_mode, "api_key_token")
+        s.validate()
+        self.assertEqual(s.resolved_auth_url(), "https://api.example.com/authenticate")
+        self.assertEqual(s.resolved_refresh_url(), "https://api.example.com/refresh")
+
+    def test_api_key_token_mode_needs_a_key(self):
         s = Settings.load(base_url="https://api.example.com")
+        with self.assertRaises(ConfigError) as ctx:
+            s.validate()
+        self.assertIn("api_key", str(ctx.exception))
+
+    def test_explicit_auth_urls_override_the_paths(self):
+        s = Settings.load(base_url="https://api.example.com", api_key="k",
+                          auth_url="https://auth.example.com/v2/authenticate")
+        self.assertEqual(s.resolved_auth_url(),
+                         "https://auth.example.com/v2/authenticate")
+
+    def test_validate_lists_every_missing_oauth_field(self):
+        s = Settings.load(base_url="https://api.example.com", auth_mode="oauth2")
         with self.assertRaises(ConfigError) as ctx:
             s.validate()
         message = str(ctx.exception)

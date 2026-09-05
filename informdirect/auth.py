@@ -1,17 +1,23 @@
 """Authentication strategies.
 
-Two are supported because the published Inform Direct docs were not reachable
-when this was written; pick one with `auth_mode` in settings:
+Inform Direct's documented flow is `api_key_token` and it is the default: you
+POST your API key to the authentication endpoint, get back a short-lived access
+token (15 minutes) and a refresh token, and call /refresh when a request comes
+back 401. Refresh returns a *new* refresh token as well as a new access token,
+so the stored one is rotated each time.
 
+Two others are available in case the account is provisioned differently:
+
+  api_key  - a static key sent in `api_key_header` on every request
   oauth2   - RFC 6749 client-credentials grant against `token_url`
-  api_key  - a static key sent in `api_key_header`
 
-Both expose the same surface: `apply(headers)` and `invalidate()`.
+All three expose the same surface: `apply(headers)` and `invalidate()`.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import stat
@@ -203,6 +209,34 @@ class TokenCache:
         data[self.key] = {"access_token": token, "expires_at": expires_at}
         self._write_all(data)
 
+    def read_tokens(self, now):
+        """(access_token or None, refresh_token or None, expires_at).
+
+        The access token is dropped once expired, but the refresh token is still
+        returned - that is the whole point of holding it.
+        """
+        data = self._read_all()
+        entry = data.get(self.key)
+        if not isinstance(entry, dict):
+            return None
+        refresh = entry.get("refresh_token") or None
+        expires_at = entry.get("expires_at")
+        access = entry.get("access_token") or None
+        if not isinstance(expires_at, (int, float)) or now >= expires_at:
+            access, expires_at = None, 0.0
+        if not access and not refresh:
+            return None
+        return access, refresh, float(expires_at)
+
+    def write_tokens(self, access, refresh, expires_at):
+        data = self._read_all()
+        data[self.key] = {
+            "access_token": access,
+            "refresh_token": refresh,
+            "expires_at": expires_at,
+        }
+        self._write_all(data)
+
     def clear(self):
         data = self._read_all()
         if data.pop(self.key, None) is not None:
@@ -228,7 +262,175 @@ class TokenCache:
             pass
 
 
+class ApiKeyTokenAuth:
+    """Inform Direct's documented flow: API key -> access token + refresh token.
+
+    The access token lasts 15 minutes. When it expires we try /refresh first and
+    fall back to re-authenticating with the API key, so a rotated-out or revoked
+    refresh token self-heals rather than wedging the client.
+    """
+
+    def __init__(self, settings, transport=None, cache=None, clock=time.time):
+        self._settings = settings
+        self._transport = transport or UrllibTransport()
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._access = None
+        self._refresh = None
+        self._expires_at = 0.0
+        self._key_in = settings.api_key_in
+        self._cache = cache
+        if self._cache is None and settings.cache_tokens:
+            self._cache = TokenCache(settings.token_cache_path, self._cache_key())
+
+    # -- public ---------------------------------------------------------- #
+
+    def apply(self, headers):
+        headers["Authorization"] = "Bearer " + self.token()
+        return headers
+
+    def token(self):
+        with self._lock:
+            if self._access and self._clock() < self._expires_at:
+                return self._access
+            if self._cache is not None:
+                cached = self._cache.read_tokens(self._clock())
+                if cached:
+                    self._access, self._refresh, self._expires_at = cached
+                    if self._access:
+                        return self._access
+            self._obtain_locked()
+            return self._access
+
+    def invalidate(self):
+        """Drop the access token but keep the refresh token for the next call."""
+        with self._lock:
+            self._access = None
+            self._expires_at = 0.0
+        return True
+
+    def describe(self):
+        return f"api_key_token auth_url={self._settings.resolved_auth_url()}"
+
+    # -- internals -------------------------------------------------------- #
+
+    def _cache_key(self):
+        s = self._settings
+        digest = hashlib.sha256(s.api_key.encode("utf-8")).hexdigest()[:16]
+        return f"api_key_token|{s.resolved_auth_url()}|{digest}"
+
+    def _obtain_locked(self):
+        if self._refresh:
+            try:
+                self._store(self._refresh_tokens())
+                return
+            except AuthError:
+                # Refresh tokens rotate and can be revoked; fall back to the key.
+                self._refresh = None
+        self._store(self._authenticate())
+
+    def _store(self, parsed):
+        access, refresh, expires_in = parsed
+        self._access = access
+        if refresh:
+            self._refresh = refresh
+        self._expires_at = self._clock() + max(expires_in - EXPIRY_SKEW, 0.0)
+        if self._cache is not None:
+            self._cache.write_tokens(self._access, self._refresh, self._expires_at)
+
+    def _authenticate(self):
+        settings = self._settings
+        styles = ["body", "header"] if self._key_in == "auto" else [self._key_in]
+        last_error = None
+        for style in styles:
+            headers = {"Accept": "application/json",
+                       "User-Agent": settings.user_agent}
+            body = None
+            if style == "header":
+                headers[settings.api_key_header] = settings.api_key
+            else:
+                headers["Content-Type"] = "application/json"
+                body = json.dumps({settings.api_key_field: settings.api_key}).encode()
+            response = self._transport.send(
+                "POST", settings.resolved_auth_url(), headers=headers, body=body,
+                timeout=settings.timeout,
+            )
+            if response.ok:
+                if self._key_in == "auto":
+                    self._key_in = style
+                return self._parse_tokens(response, "authentication")
+            last_error = AuthError(
+                f"authentication failed (api key in {style}): HTTP "
+                f"{response.status} {_error_detail(response)}"
+            )
+        raise last_error or AuthError("authentication failed")
+
+    def _refresh_tokens(self):
+        settings = self._settings
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": settings.user_agent,
+        }
+        body = json.dumps({settings.refresh_token_field: self._refresh}).encode()
+        response = self._transport.send(
+            "POST", settings.resolved_refresh_url(), headers=headers, body=body,
+            timeout=settings.timeout,
+        )
+        if not response.ok:
+            raise AuthError(
+                f"refresh failed: HTTP {response.status} {_error_detail(response)}"
+            )
+        return self._parse_tokens(response, "refresh")
+
+    def _parse_tokens(self, response, what):
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise AuthError(
+                f"{what} endpoint returned a non-JSON body: {response.text[:200]!r}"
+            )
+        flat = {_norm(k): v for k, v in _walk(payload)}
+        access = _first_of(flat, ("accesstoken", "token", "jwt", "idtoken"))
+        if not access:
+            raise AuthError(
+                f"{what} response had no access token (keys: "
+                + ", ".join(sorted(payload)) + ")"
+            )
+        refresh = _first_of(flat, ("refreshtoken", "refresh"))
+        expires = _first_of(flat, ("expiresin", "expiresinseconds", "ttl"))
+        try:
+            expires_in = float(expires)
+        except (TypeError, ValueError):
+            expires_in = float(self._settings.access_token_ttl)
+        return str(access), (str(refresh) if refresh else None), expires_in
+
+
+def _walk(payload, depth=0):
+    """Yield (key, value) for scalars at any depth - token may be nested."""
+    if not isinstance(payload, dict) or depth > 3:
+        return
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            yield from _walk(value, depth + 1)
+        else:
+            yield key, value
+
+
+def _norm(value):
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+def _first_of(flat, names):
+    for name in names:
+        value = flat.get(name)
+        if value not in (None, "", []):
+            return value
+    return None
+
+
 def build_auth(settings, transport=None):
     if settings.auth_mode == "api_key":
         return ApiKeyAuth(settings)
-    return OAuth2ClientCredentials(settings, transport=transport)
+    if settings.auth_mode == "oauth2":
+        return OAuth2ClientCredentials(settings, transport=transport)
+    return ApiKeyTokenAuth(settings, transport=transport)

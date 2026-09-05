@@ -18,47 +18,82 @@ Standard library only. No `pip install` needed to run it.
 
 ---
 
-## ⚠️ One thing is not finished yet
+## What is confirmed, and what is not
 
-The published API docs
-(`informdirect.portal.swaggerhub.com`) were **blocked by the network egress policy**
-on the machine this was written on, so the exact **base URL, token URL and endpoint
-paths could not be read**. Everything else — auth, retries, paging, parsing,
-reconciliation — is written and tested.
+The docs portal (`informdirect.portal.swaggerhub.com`) is blocked by the network
+egress policy on the machine this was built on, so I could not read the pages
+directly. Inform Direct's own published material fills in most of it:
 
-`config/endpoints.json` therefore ships with `"_status": "provisional"` and
-sensible-but-unconfirmed paths. The CLI prints a warning while that is the case.
-See **Finishing the setup** below — it is about ten minutes of work.
+**Confirmed**
+
+- The Integration API is a REST service, launched around May 2025, aimed at
+  syncing Practice Management Systems with Inform Direct.
+- **Auth**: POST your API key to the authentication endpoint for an access token
+  valid for **15 minutes**, plus a refresh token. On a 401, call `/refresh`,
+  which returns a new access token *and a new refresh token*. This is
+  implemented as `auth_mode: "api_key_token"` and is the default.
+- **Keys**: create a sandbox key yourself and test against sandbox with no
+  effect on live data; apply for a production key and pass verification to go
+  live.
+- **Operations**: list the companies linked to your account, retrieve
+  high-level company details, add a company, remove a company.
+
+**Not confirmed**
+
+- The base URLs (sandbox and production) and the literal endpoint paths.
+  `config/endpoints.json` ships marked `"_status": "provisional"` and the CLI
+  warns while that is true.
+- The exact JSON field names in requests and responses.
+
+**The open question that matters**
+
+Inform Direct describes company retrieval as *"high-level company details"*. It
+does not say whether that includes the **accounts year end and filing deadline**
+— which is precisely what the planner feed and the reconciliation run on. So
+`check` reports it rather than leaving you to find out later:
+
+```
+field coverage across the sample:
+  [ok  ] company number                   25/25 (needed by the planner)
+  [ok  ] company name                     25/25 (needed by the planner)
+  [NONE] accounts due date                 0/25 (needed by the planner)
+```
+
+If the deadline fields are missing, the fix is usually a naming mismatch, not an
+absent feature — `companies --json` dumps each company's raw payload so you can
+check, and adding the real name to the aliases in `models.py` makes it map.
+
+**Officers, shareholders and filing history are not in the documented API.** So
+the SA director / close-company check can't come off the browser yet. The code
+for it is written and tested; those three operations sit parked in
+`config/endpoints.json` under `_not_offered_by_the_api`, and moving them into
+`operations` is all it takes if a later version adds them.
 
 ---
 
 ## Setup
 
-### 1. Credentials
+### 1. Get a sandbox key
 
-Get an API client id and secret from Inform Direct (Settings → API, or via your
-account manager — the API is a paid add-on on some plans).
+In Inform Direct, create a sandbox API key. It authenticates against the sandbox
+with no effect on live data. When you're ready, apply for a production key and
+complete their verification.
 
 ```bash
 cp config/settings.example.json config/settings.json
 $EDITOR config/settings.json      # gitignored
 ```
 
-Or keep the secret out of files entirely:
+Or keep the key out of files entirely:
 
 ```bash
-export INFORMDIRECT_BASE_URL="https://.../v1"
-export INFORMDIRECT_TOKEN_URL="https://.../oauth2/token"
-export INFORMDIRECT_CLIENT_ID="..."
-export INFORMDIRECT_CLIENT_SECRET="..."
+export INFORMDIRECT_BASE_URL="https://..."
+export INFORMDIRECT_API_KEY="..."
 ```
 
-Every setting can come from either place; environment wins over the file, and
-command line flags win over both. If Inform Direct issues a static API key rather
-than OAuth client credentials, set `auth_mode` to `api_key` and fill in `api_key`
-(and `api_key_header` if it is not `X-Api-Key`).
+Environment wins over the file, and command line flags win over both.
 
-### 2. Finishing the setup
+### 2. Confirm the paths
 
 Download the OpenAPI spec from SwaggerHub (**Export → Download API → JSON**) and
 point the importer at it. It rewrites `config/endpoints.json` with the real paths
@@ -68,16 +103,25 @@ and tells you the correct `base_url`:
 python3 scripts/fetch_spec.py --spec ~/Downloads/informdirect.json --write
 ```
 
-Add `--list` first if you want to see every path in the spec before it decides.
-Anything it cannot match automatically is named in the output so you can fill it
-in by hand — the file is five short entries, nothing is generated into code.
+Add `--list` first to see every path in the spec before it decides. Anything it
+can't match is named in the output so you can fill it in — the file is four short
+entries, and nothing is generated into code.
+
+While you're in the docs, check the auth endpoint's request shape against
+`auth_path`, `refresh_path` and `api_key_field` in your settings. The defaults
+(`/authenticate`, `/refresh`, `apiKey`) follow the documented description, and
+`api_key_in: "auto"` tries the key in the JSON body then in the header, so there
+is a fair chance it works untouched.
 
 ### 3. Check it works
 
 ```bash
 python3 -m informdirect config    # resolved settings, secrets masked
-python3 -m informdirect check     # gets a token and reads three companies
+python3 -m informdirect check     # gets a token, then reports field coverage
 ```
+
+`check` exits `2` if a field the planner needs is missing, so it is safe to put
+in a smoke test.
 
 ---
 
@@ -133,9 +177,11 @@ So a scheduled run can alert only when it matters.
 python3 -m informdirect company 01234567
 ```
 
-Prints the company, its current directors and its shareholdings with percentages
-— the check the SA data run does by hand against the Portfolio screen. Add
-`--json` to pipe it somewhere.
+Prints the company's high-level details. It also prints current directors and
+shareholdings with percentages — the check the SA data run does by hand against
+the Portfolio screen — but **only once those operations exist**; today they are
+parked (see above) and that part comes back empty. Add `--json` to pipe it
+somewhere.
 
 ### From Python
 
@@ -147,9 +193,14 @@ for company in portfolio.iter_companies(include_dissolved=False):
     print(company.company_number, company.accounts_next_made_up_to,
           company.accounts_due)
 
+# Company management (documented, but not exposed on the CLI)
+portfolio.add_company("01234567", auth_code="AB12CD")   # CH authentication code
+portfolio.remove_company("01234567")
+
+# Officers and shareholders: written and tested, but the operations are parked
+# in config/endpoints.json because the documented API does not offer them.
+# Calling these today raises EndpointNotConfigured naming what is available.
 view = portfolio.close_company_view("01234567")
-print([d.name for d in view["directors"]])
-print([(s.name, s.percentage, s.is_corporate) for s in view["shareholders"]])
 ```
 
 ---
@@ -159,7 +210,7 @@ print([(s.name, s.percentage, s.is_corporate) for s in view["shareholders"]])
 | File | What it does |
 |---|---|
 | `config.py` | Settings from args → env → JSON file → defaults; secrets masked on output |
-| `auth.py` | OAuth2 client credentials with token caching and refresh, or a static API key |
+| `auth.py` | API key → access token + rotating refresh token; also api_key and oauth2 modes |
 | `transport.py` | Stdlib HTTP; swappable, which is how the tests avoid the network |
 | `client.py` | Retries, backoff, error mapping, and pagination |
 | `endpoints.py` | Named operations resolved through `config/endpoints.json` |
@@ -169,7 +220,7 @@ print([(s.name, s.percentage, s.is_corporate) for s in view["shareholders"]])
 | `reconcile.py` | Registry vs planner rows → a list of actions |
 | `cli.py` | `python3 -m informdirect ...` |
 
-Two deliberate choices, both because the payload shapes were unconfirmed:
+Two deliberate choices, both because the paths and payload shapes are unconfirmed:
 
 - **No URL path is hardcoded anywhere except `config/endpoints.json`.** Correcting
   that one file is the whole job of pointing this at the real API.
@@ -188,4 +239,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-112 tests, stdlib `unittest`, no network and no pip install.
+134 tests, stdlib `unittest`, no network and no pip install.

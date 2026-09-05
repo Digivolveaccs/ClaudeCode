@@ -25,6 +25,20 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_EXCEPTIONS = 2
 
+SAMPLE_SIZE = 25
+
+# (label, Company attribute, is it required for the planner feed)
+FIELD_CHECKS = (
+    ("company number", "company_number", True),
+    ("company name", "name", True),
+    ("status", "status", True),
+    ("next accounts made up to", "accounts_next_made_up_to", True),
+    ("accounts due date", "accounts_due", True),
+    ("last accounts made up to", "accounts_last_made_up_to", False),
+    ("confirmation statement due", "confirmation_due", False),
+    ("incorporation date", "incorporation_date", False),
+)
+
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -139,6 +153,13 @@ def _cmd_config(args):
 
 
 def _cmd_check(args):
+    """Prove the credentials work, then report which fields the API returns.
+
+    Inform Direct describes the Integration API as returning "high-level company
+    details". Whether that includes the accounts year end and deadline decides
+    whether the planner feed and reconciliation can run off the API at all, so
+    this reports it rather than leaving it to be discovered later.
+    """
     portfolio = _portfolio(args)
     client = portfolio.client
     print(f"base url  : {client.settings.base_url}")
@@ -146,18 +167,43 @@ def _cmd_check(args):
     if hasattr(client.auth, "token"):
         client.auth.token()
         print("token     : obtained")
+
     sample = []
     for company in portfolio.iter_companies():
         sample.append(company)
-        if len(sample) >= 3:
+        if len(sample) >= SAMPLE_SIZE:
             break
-    print(f"companies : reachable, first {len(sample)} record(s):")
-    for company in sample:
-        print(f"  {company.company_number or '(no number)':<10} "
-              f"{company.name[:40]:<40} due {company.accounts_due or '-'}")
+
     if not sample:
-        print("  (portfolio returned no companies - check entitlements)")
+        print("companies : none returned - check the key's entitlements",
+              file=sys.stderr)
         return EXIT_EXCEPTIONS
+
+    print(f"companies : reachable, sampled {len(sample)}")
+    for company in sample[:3]:
+        print(f"  {company.company_number or '(no number)':<10} "
+              f"{company.name[:38]:<38} due {company.accounts_due or '-'}")
+
+    print("\nfield coverage across the sample:")
+    missing_critical = []
+    for label, attr, critical in FIELD_CHECKS:
+        present = sum(1 for c in sample if getattr(c, attr, None) not in (None, ""))
+        mark = "ok  " if present == len(sample) else ("some" if present else "NONE")
+        flag = " (needed by the planner)" if critical else ""
+        print(f"  [{mark}] {label:<32} {present}/{len(sample)}{flag}")
+        if critical and not present:
+            missing_critical.append(label)
+
+    if missing_critical:
+        print("\nThe API returned nothing for: " + ", ".join(missing_critical) + ".")
+        print("Either those fields are not part of 'high-level company details',")
+        print("or they are named something the parser does not recognise yet.")
+        print("Run `companies --json <file>` and look at a company's `raw` payload:")
+        print("if the data is there under another name, add that name to the")
+        print("aliases in informdirect/models.py and it will start mapping.")
+        return EXIT_EXCEPTIONS
+
+    print("\nEverything the planner feed and reconciliation need is present.")
     return EXIT_OK
 
 
@@ -188,10 +234,9 @@ def _cmd_company(args):
     if args.as_json:
         print(json.dumps({
             "company": {k: _iso(v) for k, v in vars(company).items() if k != "raw"},
-            "directors": [{k: _iso(v) for k, v in vars(o).items() if k != "raw"}
-                          for o in view["directors"]],
-            "shareholders": [{k: _iso(v) for k, v in vars(s).items() if k != "raw"}
-                             for s in view["shareholders"]],
+            "directors": _people(view["directors"]),
+            "shareholders": _people(view["shareholders"]),
+            "unavailable": view["unavailable"],
         }, indent=2))
         return EXIT_OK
 
@@ -201,16 +246,24 @@ def _cmd_company(args):
     print(f"  next year end : {company.accounts_next_made_up_to or '-'}")
     print(f"  accounts due  : {company.accounts_due or '-'}")
     print(f"  CS due        : {company.confirmation_due or '-'}")
-    print("  directors:")
-    for officer in view["directors"] or []:
-        print(f"    {officer.name} ({officer.role}) appointed "
-              f"{officer.appointed_on or '-'}")
-    print("  shareholders:")
-    for holder in view["shareholders"] or []:
-        pct = f"{holder.percentage:.2f}%" if holder.percentage is not None else "-"
-        kind = "corporate" if holder.is_corporate else "individual"
-        print(f"    {holder.name} {pct} ({holder.shares_held or '-'} "
-              f"{holder.share_class or 'shares'}, {kind})")
+    if view["directors"] is None:
+        print("  directors     : not available from this API "
+              "(see _not_offered_by_the_api in config/endpoints.json)")
+    else:
+        print("  directors:")
+        for officer in view["directors"]:
+            print(f"    {officer.name} ({officer.role}) appointed "
+                  f"{officer.appointed_on or '-'}")
+
+    if view["shareholders"] is None:
+        print("  shareholders  : not available from this API")
+    else:
+        print("  shareholders:")
+        for holder in view["shareholders"]:
+            pct = f"{holder.percentage:.2f}%" if holder.percentage is not None else "-"
+            kind = "corporate" if holder.is_corporate else "individual"
+            print(f"    {holder.name} {pct} ({holder.shares_held or '-'} "
+                  f"{holder.share_class or 'shares'}, {kind})")
     return EXIT_OK
 
 
@@ -272,6 +325,12 @@ def _load_snapshot(path):
         return [Company.from_api(r.get("raw") or r) for r in records]
     with target.open(newline="", encoding="utf-8-sig") as handle:
         return [Company.from_api(row) for row in _csv.DictReader(handle)]
+
+
+def _people(records):
+    if records is None:
+        return None
+    return [{k: _iso(v) for k, v in vars(r).items() if k != "raw"} for r in records]
 
 
 def _iso(value):

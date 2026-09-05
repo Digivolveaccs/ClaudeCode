@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from .client import Client
-from .errors import NotFoundError
-from .models import Company, Officer, Shareholder, compute_percentages
+from .errors import EndpointNotConfigured, NotFoundError
+from .models import (
+    Company, Officer, Shareholder, clean_company_number, compute_percentages,
+)
 
 
 class Portfolio:
@@ -51,7 +53,34 @@ class Portfolio:
                 return company
         return None
 
+    # -- membership -------------------------------------------------------- #
+
+    def add_company(self, company_number, *, auth_code=None, extra=None):
+        """Link a company to the account.
+
+        `auth_code` is the Companies House authentication code, which Inform
+        Direct needs before it can act for a company.
+        """
+        body = {"companyNumber": clean_company_number(company_number)}
+        if auth_code:
+            body["authenticationCode"] = auth_code
+        if extra:
+            body.update(extra)
+        response = self.client.call("add_company", json_body=body)
+        payload = response.json()
+        return Company.from_api(payload) if isinstance(payload, dict) else None
+
+    def remove_company(self, company):
+        """Unlink a company no longer in use. Returns True on success."""
+        self.client.call("remove_company",
+                         path_params={"company_id": _id_of(company)})
+        return True
+
     # -- officers and shares ---------------------------------------------- #
+    # Not part of the Integration API as documented - see the
+    # "_not_offered_by_the_api" note in config/endpoints.json. The code stays
+    # because it is written and tested, and starts working the moment those
+    # operations are moved into the map.
 
     def officers(self, company, *, current_only=False):
         officers = [
@@ -89,15 +118,26 @@ class Portfolio:
     # -- close company check (used by the SA data run) --------------------- #
 
     def close_company_view(self, company):
-        """Everything the SA return needs about one company, in one call set."""
+        """Everything the SA return needs about one company, in one call set.
+
+        Officers and shareholders are not part of the Integration API as
+        documented, so those two come back as None (not []) with the reason in
+        `unavailable`, rather than raising. An empty list means "the API
+        answered and there are none"; None means "the API cannot tell us".
+        """
         record = company if isinstance(company, Company) else self.get_company(company)
         if record is None:
             return None
-        return {
-            "company": record,
-            "directors": self.directors(record),
-            "shareholders": self.shareholders(record),
-        }
+
+        view = {"company": record, "directors": None, "shareholders": None,
+                "unavailable": {}}
+        for key, fetch in (("directors", self.directors),
+                           ("shareholders", self.shareholders)):
+            try:
+                view[key] = fetch(record)
+            except EndpointNotConfigured as exc:
+                view["unavailable"][key] = str(exc)
+        return view
 
 
 def _id_of(company):
