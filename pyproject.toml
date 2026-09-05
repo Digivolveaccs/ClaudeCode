@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "informdirect"
+version = "1.0.0"
+description = "Inform Direct API client for the Digivolve planner and job reconciliation"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+# Only needed if you feed scripts/fetch_spec.py a YAML spec rather than JSON.
+yaml = ["PyYAML>=5.4"]
+
+[project.scripts]
+informdirect = "informdirect.cli:main"
+
+[tool.setuptools]
+packages = ["informdirect"]

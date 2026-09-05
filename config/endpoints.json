@@ -1,0 +1,49 @@
+{
+  "_status": "provisional",
+  "_note": [
+    "PROVISIONAL PATHS - not yet confirmed against the published Inform Direct",
+    "OpenAPI spec. Confirm or regenerate with:",
+    "    python3 scripts/fetch_spec.py --spec <openapi.json|url> --write",
+    "Every path below is only a default; nothing else in the package hardcodes a",
+    "URL, so correcting this file is all that is needed to point at the real API."
+  ],
+  "_spec_source": null,
+  "_generated_at": null,
+  "pagination": {
+    "style": "auto",
+    "page_param": "page",
+    "page_size_param": "pageSize",
+    "offset_param": "offset",
+    "limit_param": "limit",
+    "cursor_param": "cursor",
+    "first_page": 1,
+    "max_pages": 500
+  },
+  "operations": {
+    "list_companies": {
+      "method": "GET",
+      "path": "/companies",
+      "description": "Every company in the portfolio."
+    },
+    "get_company": {
+      "method": "GET",
+      "path": "/companies/{company_id}",
+      "description": "One company by its Inform Direct id or company number."
+    },
+    "list_officers": {
+      "method": "GET",
+      "path": "/companies/{company_id}/officers",
+      "description": "Directors and secretaries, current and resigned."
+    },
+    "list_shareholders": {
+      "method": "GET",
+      "path": "/companies/{company_id}/shareholders",
+      "description": "Shareholdings, used for the close-company look-through."
+    },
+    "list_filings": {
+      "method": "GET",
+      "path": "/companies/{company_id}/filings",
+      "description": "Filing history - what has actually been submitted."
+    }
+  }
+}

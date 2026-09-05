@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Copy to config/settings.json and fill in. That file is gitignored.",
+    "Every value here can also come from an environment variable:",
+    "INFORMDIRECT_BASE_URL, INFORMDIRECT_CLIENT_SECRET, and so on.",
+    "Prefer environment variables for the secrets on shared machines."
+  ],
+
+  "base_url": "https://REPLACE-ME/v1",
+  "auth_mode": "oauth2",
+
+  "token_url": "https://REPLACE-ME/oauth2/token",
+  "client_id": "",
+  "client_secret": "",
+  "scope": "",
+  "token_auth_style": "auto",
+
+  "page_size": 100,
+  "timeout": 30,
+  "max_retries": 4
+}
