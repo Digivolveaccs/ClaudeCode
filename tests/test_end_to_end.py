@@ -24,6 +24,8 @@ ENDPOINTS = {
     "operations": {
         "list_companies": {"method": "GET", "path": "/companies"},
         "get_company": {"method": "GET", "path": "/companies/{company_id}"},
+        "add_company": {"method": "POST", "path": "/companies"},
+        "remove_company": {"method": "DELETE", "path": "/companies/{company_id}"},
         "list_officers": {"method": "GET", "path": "/companies/{company_id}/officers"},
         "list_shareholders": {"method": "GET",
                               "path": "/companies/{company_id}/shareholders"},
@@ -286,3 +288,89 @@ class ParkedOperationsTest(unittest.TestCase):
                 code = main(["company", "1234567"])
         self.assertEqual(code, 0)
         self.assertIn("not available from this API", buffer.getvalue())
+
+
+class VerifyCommandTest(unittest.TestCase):
+    """The four-endpoint sandbox run Inform Direct require before a production key."""
+
+    def _run(self, argv, handler=None):
+        from informdirect.cli import main
+        from unittest import mock
+
+        portfolio = make_portfolio()
+        portfolio.client.settings.api_key = "sandbox-abc123XYZ"
+        if handler is not None:
+            portfolio.client.transport = FakeTransport(handler=handler)
+        buffer = io.StringIO()
+        with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+            with redirect_stdout(buffer):
+                code = main(argv)
+        return code, buffer.getvalue()
+
+    def test_without_confirm_the_mutating_endpoints_are_skipped(self):
+        code, output = self._run(["verify"])
+        self.assertEqual(code, 2, "skipped endpoints are not a pass")
+        self.assertIn("Add company", output)
+        self.assertIn("needs --confirm", output)
+        self.assertIn("Skipped:", output)
+        self.assertNotIn("email support@informdirect.co.uk", output)
+
+    def test_confirm_requires_a_company_number(self):
+        code, _ = self._run(["verify", "--confirm"])
+        self.assertEqual(code, 1)
+
+    def test_full_run_passes_and_prints_the_production_request_details(self):
+        seen = []
+
+        def handler(method, url, headers=None, body=None):
+            seen.append((method, url.split("?")[0]))
+            if method == "POST":
+                return json_response({"companyNumber": "05550001",
+                                      "companyName": "New Client Ltd"})
+            if method == "DELETE":
+                return json_response({}, status=204)
+            return routed(method, url, headers, body)
+
+        code, output = self._run(
+            ["verify", "--confirm", "--company-number", "05550001",
+             "--auth-code", "AB12CD"], handler=handler)
+
+        self.assertEqual(code, 0)
+        for name in ("Authenticate", "Get companies", "Add company",
+                     "Get company", "Remove company"):
+            self.assertIn(name, output)
+        self.assertNotIn("FAIL", output)
+        self.assertIn("All four endpoints returned successful", output)
+        # The support email needs the last 6 of the key, and nothing more of it.
+        self.assertIn("...123XYZ", output)
+        self.assertNotIn("sandbox-abc123XYZ", output)
+        self.assertIn(("POST", "https://api.example.com/v1/companies"), seen)
+        self.assertIn(("DELETE", "https://api.example.com/v1/companies/05550001"), seen)
+
+    def test_keep_skips_removal(self):
+        def handler(method, url, headers=None, body=None):
+            if method == "POST":
+                return json_response({"companyNumber": "05550001"})
+            if method == "DELETE":
+                raise AssertionError("--keep must not delete")
+            return routed(method, url, headers, body)
+
+        code, output = self._run(
+            ["verify", "--confirm", "--keep", "--company-number", "05550001"],
+            handler=handler)
+        self.assertEqual(code, 2)
+        self.assertIn("--keep was passed", output)
+
+    def test_a_failing_endpoint_is_reported_and_fails_the_run(self):
+        def handler(method, url, headers=None, body=None):
+            if method == "POST":
+                return json_response({"message": "company already linked"}, 400)
+            return routed(method, url, headers, body)
+
+        code, output = self._run(
+            ["verify", "--confirm", "--company-number", "05550001"],
+            handler=handler)
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL", output)
+        self.assertIn("company already linked", output)
+        self.assertIn("1 endpoint(s) failed: Add company", output)

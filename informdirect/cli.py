@@ -1,6 +1,7 @@
 """Command line entry point:  python3 -m informdirect <command>
 
-    check        prove the credentials and the endpoint map work
+    check        prove the credentials work and report field coverage
+    verify       exercise all four endpoints (the gate for a production key)
     companies    export the portfolio as the tracker's registry feed CSV
     company      show one company, its directors and its shareholders
     reconcile    compare the registry against planner rows
@@ -54,7 +55,7 @@ def build_parser():
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("check", help="verify credentials and endpoints")
+    sub.add_parser("check", help="prove credentials work and report field coverage")
     sub.add_parser("config", help="print resolved settings, secrets masked")
 
     companies = sub.add_parser("companies", help="export the registry feed")
@@ -67,6 +68,19 @@ def build_parser():
     company = sub.add_parser("company", help="show one company in detail")
     company.add_argument("number", help="company number or Inform Direct id")
     company.add_argument("--json", action="store_true", dest="as_json")
+
+    verify = sub.add_parser(
+        "verify",
+        help="exercise all four endpoints - the gate for a production key")
+    verify.add_argument("--company-number",
+                        help="a company to add then remove (required with --confirm)")
+    verify.add_argument("--auth-code",
+                        help="Companies House authentication code for that company")
+    verify.add_argument("--confirm", action="store_true",
+                        help="actually run Add company and Remove company; without "
+                             "it only the read-only endpoints are exercised")
+    verify.add_argument("--keep", action="store_true",
+                        help="skip Remove company, leaving the added company linked")
 
     rec = sub.add_parser("reconcile", help="compare registry against planner rows")
     rec.add_argument("--planner", required=True, help="planner rows CSV")
@@ -132,6 +146,8 @@ def _dispatch(args):
         return _cmd_companies(args)
     if args.command == "company":
         return _cmd_company(args)
+    if args.command == "verify":
+        return _cmd_verify(args)
     if args.command == "reconcile":
         return _cmd_reconcile(args)
     return EXIT_ERROR
@@ -264,6 +280,111 @@ def _cmd_company(args):
             kind = "corporate" if holder.is_corporate else "individual"
             print(f"    {holder.name} {pct} ({holder.shares_held or '-'} "
                   f"{holder.share_class or 'shares'}, {kind})")
+    return EXIT_OK
+
+
+def _cmd_verify(args):
+    """Exercise the four endpoints Inform Direct requires before granting a
+    production key: Add company, Remove company, Get company, Get companies.
+
+    Add and Remove mutate the account, so they only run with --confirm. Without
+    it this exercises the read-only half and tells you what it skipped.
+    """
+    if args.confirm and not args.company_number:
+        print("--confirm needs --company-number: a company to add and then remove.",
+              file=sys.stderr)
+        return EXIT_ERROR
+
+    portfolio = _portfolio(args)
+    client = portfolio.client
+    results = []
+
+    def step(name, fn, *, skipped=None):
+        if skipped:
+            results.append((name, "skip", skipped))
+            return None
+        try:
+            detail = fn()
+        except errors.InformDirectError as exc:
+            results.append((name, "FAIL", str(exc)))
+            return None
+        results.append((name, "pass", detail))
+        return detail
+
+    def do_authenticate():
+        if not hasattr(client.auth, "token"):
+            return "static key - no token exchange"
+        client.auth.token()
+        return "access token obtained"
+
+    step("Authenticate", do_authenticate)
+
+    listed = []
+
+    def do_list():
+        for company in portfolio.iter_companies():
+            listed.append(company)
+            if len(listed) >= 5:
+                break
+        return f"{len(listed)} company(ies) returned"
+
+    step("Get companies", do_list)
+
+    added = None
+    if args.confirm:
+        def do_add():
+            nonlocal added
+            added = portfolio.add_company(args.company_number,
+                                          auth_code=args.auth_code)
+            return f"linked {args.company_number}"
+        step("Add company", do_add)
+    else:
+        step("Add company", None, skipped="needs --confirm (it changes the account)")
+
+    target = args.company_number or (listed[0].company_number if listed else None)
+
+    def do_get():
+        record = portfolio.get_company(target)
+        if record is None:
+            raise errors.InformDirectError(f"no company returned for {target!r}")
+        return f"{record.company_number} {record.name}".strip()
+
+    if target:
+        step("Get company", do_get)
+    else:
+        step("Get company", None, skipped="no company number to look up")
+
+    if args.confirm and not args.keep:
+        step("Remove company",
+             lambda: f"unlinked {args.company_number}"
+             if portfolio.remove_company(args.company_number) else "")
+    elif args.keep:
+        step("Remove company", None, skipped="--keep was passed")
+    else:
+        step("Remove company", None, skipped="needs --confirm (it changes the account)")
+
+    print()
+    for name, status, detail in results:
+        print(f"  [{status:^4}] {name:<16} {detail}")
+
+    failed = [n for n, st, _ in results if st == "FAIL"]
+    skipped = [n for n, st, _ in results if st == "skip"]
+
+    if failed:
+        print(f"\n{len(failed)} endpoint(s) failed: " + ", ".join(failed))
+        return EXIT_ERROR
+    if skipped:
+        print("\nSkipped: " + ", ".join(skipped))
+        print("Inform Direct validate all four endpoints before enabling a "
+              "production key, so re-run with --confirm against sandbox.")
+        return EXIT_EXCEPTIONS
+
+    print("\nAll four endpoints returned successful authenticated responses.")
+    print("To request production access, email support@informdirect.co.uk with:")
+    print("  - your organisation name")
+    print(f"  - last 6 of the sandbox key used here: "
+          f"...{client.settings.api_key[-6:] if client.settings.api_key else '??????'}")
+    print("  - last 6 of the production key you want activated")
     return EXIT_OK
 
 

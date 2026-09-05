@@ -20,37 +20,34 @@ Standard library only. No `pip install` needed to run it.
 
 ## What is confirmed, and what is not
 
-The docs portal (`informdirect.portal.swaggerhub.com`) is blocked by the network
-egress policy on the machine this was built on, so I could not read the pages
-directly. Inform Direct's own published material fills in most of it:
+**Confirmed from Inform Direct's own documentation**
 
-**Confirmed**
+- **Endpoints**: Add company, Remove company, Get company, Get companies. That
+  is the whole API.
+- **Auth**: POST your API key to the authentication endpoint; you get back an
+  **access token valid for 15 minutes** plus a **refresh token**. Send the
+  access token as `Authorization: Bearer {token}` on every request. When a
+  request returns 401, call `/refresh` with the stored refresh token — which
+  returns a new access token *and a new refresh token*, so the stored one is
+  rotated each time. Implemented as `auth_mode: "api_key_token"`, the default.
+- **Keys**: sandbox keys are self-serve; production access is granted by Inform
+  Direct's technical team after they validate your sandbox calls.
 
-- The Integration API is a REST service, launched around May 2025, aimed at
-  syncing Practice Management Systems with Inform Direct.
-- **Auth**: POST your API key to the authentication endpoint for an access token
-  valid for **15 minutes**, plus a refresh token. On a 401, call `/refresh`,
-  which returns a new access token *and a new refresh token*. This is
-  implemented as `auth_mode: "api_key_token"` and is the default.
-- **Keys**: create a sandbox key yourself and test against sandbox with no
-  effect on live data; apply for a production key and pass verification to go
-  live.
-- **Operations**: list the companies linked to your account, retrieve
-  high-level company details, add a company, remove a company.
-
-**Not confirmed**
+**Still unconfirmed**
 
 - The base URLs (sandbox and production) and the literal endpoint paths.
-  `config/endpoints.json` ships marked `"_status": "provisional"` and the CLI
-  warns while that is true.
-- The exact JSON field names in requests and responses.
+- The exact JSON field names in requests and responses — including the body
+  shape for Add company.
+
+`config/endpoints.json` therefore ships marked `"_status": "provisional"` and
+the CLI warns while that is true. Step 2 below clears it.
 
 **The open question that matters**
 
-Inform Direct describes company retrieval as *"high-level company details"*. It
-does not say whether that includes the **accounts year end and filing deadline**
-— which is precisely what the planner feed and the reconciliation run on. So
-`check` reports it rather than leaving you to find out later:
+The API returns *"high-level company details"*, and nothing published says
+whether that includes the **accounts year end and filing deadline** — which is
+exactly what the planner feed and the reconciliation run on. So `check` reports
+it rather than leaving you to find out later:
 
 ```
 field coverage across the sample:
@@ -59,25 +56,26 @@ field coverage across the sample:
   [NONE] accounts due date                 0/25 (needed by the planner)
 ```
 
-If the deadline fields are missing, the fix is usually a naming mismatch, not an
-absent feature — `companies --json` dumps each company's raw payload so you can
-check, and adding the real name to the aliases in `models.py` makes it map.
+If those fields are missing, it is usually a naming mismatch rather than an
+absent feature — `companies --json` dumps each company's raw payload, and adding
+the real name to the aliases in `models.py` makes it map.
 
-**Officers, shareholders and filing history are not in the documented API.** So
-the SA director / close-company check can't come off the browser yet. The code
-for it is written and tested; those three operations sit parked in
-`config/endpoints.json` under `_not_offered_by_the_api`, and moving them into
-`operations` is all it takes if a later version adds them.
+**Officers, shareholders and filing history are not in the API.** So the SA
+director / close-company check can't come off the browser. That code is written
+and tested; the three operations sit parked in `config/endpoints.json` under
+`_not_offered_by_the_api`, and moving them into `operations` is all it would
+take if a later version adds them. Until then `close_company_view` returns
+`None` for them (as opposed to `[]`, which would mean "the API says there are
+none") and the CLI says so plainly.
 
 ---
 
 ## Setup
 
-### 1. Get a sandbox key
+### 1. Generate a sandbox key
 
-In Inform Direct, create a sandbox API key. It authenticates against the sandbox
-with no effect on live data. When you're ready, apply for a production key and
-complete their verification.
+In the Inform Direct platform: **Account → Manage API keys → Add API Key**. That
+gives you a sandbox-ready key for testing, with no effect on live data.
 
 ```bash
 cp config/settings.example.json config/settings.json
@@ -103,15 +101,15 @@ and tells you the correct `base_url`:
 python3 scripts/fetch_spec.py --spec ~/Downloads/informdirect.json --write
 ```
 
-Add `--list` first to see every path in the spec before it decides. Anything it
-can't match is named in the output so you can fill it in — the file is four short
-entries, and nothing is generated into code.
+Add `--list` first to see every path before it decides. Anything it can't match
+is named in the output — the file is four short entries, and nothing is generated
+into code.
 
-While you're in the docs, check the auth endpoint's request shape against
-`auth_path`, `refresh_path` and `api_key_field` in your settings. The defaults
+While you're in the docs, check the auth request shape against `auth_path`,
+`refresh_path` and `api_key_field` in your settings. The defaults
 (`/authenticate`, `/refresh`, `apiKey`) follow the documented description, and
-`api_key_in: "auto"` tries the key in the JSON body then in the header, so there
-is a fair chance it works untouched.
+`api_key_in: "auto"` tries the key in the JSON body then in a header, so there is
+a fair chance it works untouched.
 
 ### 3. Check it works
 
@@ -122,6 +120,39 @@ python3 -m informdirect check     # gets a token, then reports field coverage
 
 `check` exits `2` if a field the planner needs is missing, so it is safe to put
 in a smoke test.
+
+### 4. Earn the production key
+
+Inform Direct only enable a production key once their technical team have seen
+successful sandbox calls to **all four** endpoints. `verify` makes exactly those
+calls and reports each one:
+
+```bash
+python3 -m informdirect verify --confirm \
+  --company-number 01234567 --auth-code AB12CD
+```
+
+```
+  [pass] Authenticate     access token obtained
+  [pass] Get companies    5 company(ies) returned
+  [pass] Add company      linked 01234567
+  [pass] Get company      01234567 Example Ltd
+  [pass] Remove company   unlinked 01234567
+
+All four endpoints returned successful authenticated responses.
+To request production access, email support@informdirect.co.uk with:
+  - your organisation name
+  - last 6 of the sandbox key used here: ...123XYZ
+  - last 6 of the production key you want activated
+```
+
+Add company and Remove company change the account, so they **only run with
+`--confirm`** — without it the read-only half runs and the rest is reported as
+skipped. `--keep` leaves the company linked instead of removing it. Point this at
+sandbox, not production.
+
+Then generate a production key in your account and send that email; their team
+validate the sandbox calls before enabling it.
 
 ---
 
@@ -239,4 +270,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-134 tests, stdlib `unittest`, no network and no pip install.
+139 tests, stdlib `unittest`, no network and no pip install.
