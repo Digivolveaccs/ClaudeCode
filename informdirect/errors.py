@@ -47,7 +47,19 @@ class BadRequestError(ApiError):
 
 
 class NotFoundError(ApiError):
-    """404 - resource (or endpoint path) does not exist."""
+    """404 - resource (or endpoint path) does not exist.
+
+    Add company returns this when the company number is not one Companies House
+    knows, so the lookup behind the endpoint fails.
+    """
+
+
+class AlreadyLinkedError(ApiError):
+    """422 - the company is already associated with this account.
+
+    Not a failure for anything that adds companies in bulk: the desired state
+    already holds.
+    """
 
 
 class ForbiddenError(ApiError):
@@ -72,7 +84,9 @@ class ServerError(ApiError):
 
 def from_response(status, message, *, body=None, headers=None, url=None):
     """Map an HTTP status onto the most specific ApiError subclass."""
-    if status in (400, 422):
+    if status == 422 and "already associated" in str(message).lower():
+        cls = AlreadyLinkedError
+    elif status in (400, 422):
         cls = BadRequestError
     elif status == 403:
         cls = ForbiddenError

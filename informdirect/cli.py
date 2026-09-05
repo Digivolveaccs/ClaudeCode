@@ -121,6 +121,9 @@ def build_parser():
                              "Direct (needs --confirm)")
     member.add_argument("--confirm", action="store_true",
                         help="actually perform the additions")
+    member.add_argument("--auth-code",
+                        help="Companies House authentication code to send with "
+                             "each addition")
     member.add_argument("--limit", type=int, default=25,
                         help="most companies to add in one run (default 25)")
 
@@ -719,23 +722,37 @@ def _cmd_membership(args):
         else:
             print(f"\nLinking {min(len(missing), args.limit)} of "
                   f"{len(missing)} company(ies)...")
-            added = failed = 0
+            added = already = failed = 0
             for action in missing[:args.limit]:
+                label = f"{action.company_number} {action.company_name[:40]}"
                 try:
-                    portfolio.add_company(action.company_number)
+                    portfolio.add_company(action.company_number,
+                                          auth_code=args.auth_code)
                     added += 1
-                    print(f"  added   {action.company_number} "
-                          f"{action.company_name[:40]}")
+                    print(f"  added     {label}")
+                except errors.AlreadyLinkedError:
+                    # The desired state already holds - not a failure.
+                    already += 1
+                    print(f"  already   {label}")
+                except errors.NotFoundError:
+                    failed += 1
+                    print(f"  NOT FOUND {label} - Companies House does not know "
+                          "this number")
+                except errors.RateLimitError:
+                    print(f"  RATE LIMIT at {label} - stopping. The endpoint "
+                          "refuses bulk use; re-run later or with a smaller "
+                          "--limit.")
+                    break
                 except errors.InformDirectError as exc:
                     failed += 1
-                    print(f"  FAILED  {action.company_number}: {exc}")
-                    if isinstance(exc, errors.RateLimitError):
-                        print("  stopping - the API is rate limiting; it refuses "
-                              "bulk use. Try again later or in smaller runs.")
-                        break
+                    print(f"  FAILED    {label}: {exc}")
                 # The add endpoint refuses bulk use, so pace the calls.
                 time.sleep(ADD_COMPANY_PAUSE)
-            print(f"\nadded {added}, failed {failed}")
+            print(f"\nadded {added}, already linked {already}, failed {failed}")
+            if added and not args.auth_code:
+                print("Companies were added without a Companies House "
+                      "authentication code; Inform Direct needs one before it "
+                      "can file for them (--auth-code).")
 
     if args.out:
         print(f"\nreport -> {write_report_csv(result, args.out)}")

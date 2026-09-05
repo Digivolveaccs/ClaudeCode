@@ -9,7 +9,19 @@ Last verified live against the sandbox: 5 September 2026.
 | Authenticate | `POST /authenticate` `{"apiKey": "..."}` → `AccessToken` + `RefreshToken`, 15 min |
 | Get companies | `GET /companies` → `{"Companies": [...]}` |
 | Get company | `GET /companies/{companyNumber}` → same envelope, one entry |
+| Add company | `POST /companies/add` → 201. Verified with a real company number |
 | Membership reconciliation | `informdirect membership --planner rows.csv` |
+
+Add company responses, all confirmed live:
+
+| | |
+|---|---|
+| 201 | `Company added with no authentication code.` — added, but Inform Direct needs the Companies House code before it can file |
+| 422 | `Company already associated with this account.` — the desired state already holds, not a failure |
+| 404 | `Company could not be found.` — Companies House does not know that number |
+| 429 | bulk payload refused; add one at a time |
+
+Pass the Companies House code with `--auth-code`, or `add_company(n, auth_code=...)`.
 
 Sandbox `https://sandbox-api.informdirect.co.uk` · production
 `https://api.informdirect.co.uk` (each refuses the other's key with a 401).
@@ -21,11 +33,13 @@ Emailed support@informdirect.co.uk, 5 September 2026:
 1. **Remove company endpoint.** Not located — every candidate answers 405 with
    `allow: GET`. When they reply, add it to `operations` in
    `config/endpoints.json` and `remove_company()` works unchanged.
-2. **A company number that Add company accepts in sandbox.**
-   `POST /companies/add` authenticates and reaches the handler, but every test
-   number returns `404 Company could not be found` — it looks the company up at
-   Companies House, and `01234567` is not real. A real number should work.
-3. **Production key**, once they have validated the sandbox calls.
+2. **Production key**, once they have validated the sandbox calls. Three of
+   their four required operations are now exercised successfully — only Remove
+   company is outstanding, for want of an endpoint.
+
+Add company is resolved: it needed a real Companies House number. `05251849`
+(ADOREUM LTD) was added successfully in sandbox and is still linked there,
+since there is no remove endpoint to undo it with.
 
 ## When the production key is enabled
 

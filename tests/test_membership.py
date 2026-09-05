@@ -177,7 +177,7 @@ class MembershipCliTest(unittest.TestCase):
         code, output = self._run(self.PLANNER, ["--add", "--confirm"], added)
         self.assertEqual(added, [{"CompanyNumber": "09999999"}],
                          "must send the confirmed field name")
-        self.assertIn("added   09999999", output)
+        self.assertIn("added     09999999", output)
 
     def test_limit_caps_how_many_are_added(self):
         planner = "Company Number,Company Name,Notes\n" + "".join(
@@ -246,3 +246,92 @@ class DetailEnvelopeTest(unittest.TestCase):
                         sleep=lambda _: None)
         Portfolio(client=client).add_company("1234567")
         self.assertEqual(sent, [{"CompanyNumber": "01234567"}])
+
+
+class AddCompanyBehaviourTest(unittest.TestCase):
+    """Behaviours confirmed live: 201 created, 422 already linked, 404 unknown."""
+
+    def _run(self, handler, argv_extra=()):
+        from unittest import mock
+
+        from informdirect.cli import main
+
+        settings = Settings.load(base_url="https://sandbox-api.example.com",
+                                 auth_mode="api_key", api_key="k", backoff_base=0.0)
+        client = Client(settings, transport=FakeTransport(handler=handler),
+                        auth=StubAuth(),
+                        endpoints=EndpointMap.from_dict(ENDPOINTS, source="test"),
+                        sleep=lambda _: None)
+        portfolio = Portfolio(client=client)
+        with tempfile.TemporaryDirectory() as tmp:
+            planner = Path(tmp) / "p.csv"
+            planner.write_text("Company Number,Company Name\n"
+                               "05251849,Adoreum Ltd\n")
+            buffer = io.StringIO()
+            with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+                with mock.patch("informdirect.cli.ADD_COMPANY_PAUSE", 0):
+                    with redirect_stdout(buffer):
+                        main(["membership", "--planner", str(planner), "--add",
+                              "--confirm", *argv_extra])
+            return buffer.getvalue()
+
+    def _handler(self, post_status, post_body):
+        def handler(method, url, headers=None, body=None):
+            if method == "POST":
+                return json_response(post_body, status=post_status)
+            return json_response({"Companies": []})
+        return handler
+
+    def test_201_counts_as_added(self):
+        out = self._run(self._handler(
+            201, {"Message": "Company added with no authentication code."}))
+        self.assertIn("added     05251849", out)
+        self.assertIn("added 1, already linked 0, failed 0", out)
+
+    def test_422_already_associated_is_not_a_failure(self):
+        out = self._run(self._handler(
+            422, {"Message": "Company already associated with this account."}))
+        self.assertIn("already   05251849", out)
+        self.assertIn("added 0, already linked 1, failed 0", out)
+
+    def test_404_unknown_company_is_reported_plainly(self):
+        out = self._run(self._handler(404, {"Message": "Company could not be found."}))
+        self.assertIn("NOT FOUND", out)
+        self.assertIn("Companies House does not know", out)
+
+    def test_429_stops_the_run(self):
+        out = self._run(self._handler(
+            429, {"Message": "This end point is not meant for bulk uploading"}))
+        self.assertIn("RATE LIMIT", out)
+        self.assertIn("smaller --limit", out)
+
+    def test_adding_without_an_auth_code_says_so(self):
+        out = self._run(self._handler(201, {"Message": "added"}))
+        self.assertIn("authentication code", out)
+
+    def test_the_auth_code_is_sent_when_given(self):
+        sent = []
+
+        def handler(method, url, headers=None, body=None):
+            if method == "POST":
+                sent.append(json.loads(body))
+                return json_response({"Message": "ok"}, status=201)
+            return json_response({"Companies": []})
+
+        out = self._run(handler, ["--auth-code", "AB12CD"])
+        self.assertEqual(sent, [{"CompanyNumber": "05251849",
+                                 "AuthenticationCode": "AB12CD"}])
+        self.assertNotIn("without a Companies House", out)
+
+
+class AlreadyLinkedMappingTest(unittest.TestCase):
+    def test_422_maps_to_already_linked_only_for_that_message(self):
+        from informdirect import errors
+
+        linked = errors.from_response(
+            422, "Company already associated with this account.")
+        self.assertIsInstance(linked, errors.AlreadyLinkedError)
+
+        other = errors.from_response(422, "Some other validation problem")
+        self.assertIsInstance(other, errors.BadRequestError)
+        self.assertNotIsInstance(other, errors.AlreadyLinkedError)

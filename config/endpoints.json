@@ -1,6 +1,6 @@
 {
   "_status": "confirmed",
-  "_confirmed_against": "https://sandbox-api.informdirect.co.uk (live probe)",
+  "_confirmed_against": "https://sandbox-api.informdirect.co.uk - all three operations exercised successfully against a real company number",
   "_note": [
     "Paths verified against the live sandbox, not guessed.",
     "GET /companies and GET /companies/{companyNumber} both return the same",
@@ -8,7 +8,11 @@
     "8-character form - an unpadded one is rejected with 400 'The company",
     "number is invalid.'"
   ],
-  "_company_record_fields": ["CompanyNumber", "Name", "PublicUrl"],
+  "_company_record_fields": [
+    "CompanyNumber",
+    "Name",
+    "PublicUrl"
+  ],
   "_what_the_api_does_not_return": [
     "company status, accounts year end, accounts filing deadline,",
     "confirmation statement dates, incorporation date, officers,",
@@ -23,9 +27,18 @@
       "the browser. The client code for them is written and tested, so moving",
       "an entry here into 'operations' is all it would take if they appear."
     ],
-    "list_officers": {"method": "GET", "path": "/companies/{company_id}/officers"},
-    "list_shareholders": {"method": "GET", "path": "/companies/{company_id}/shareholders"},
-    "list_filings": {"method": "GET", "path": "/companies/{company_id}/filings"}
+    "list_officers": {
+      "method": "GET",
+      "path": "/companies/{company_id}/officers"
+    },
+    "list_shareholders": {
+      "method": "GET",
+      "path": "/companies/{company_id}/shareholders"
+    },
+    "list_filings": {
+      "method": "GET",
+      "path": "/companies/{company_id}/filings"
+    }
   },
   "_unresolved": {
     "remove_company": [
@@ -60,7 +73,7 @@
     "add_company": {
       "method": "POST",
       "path": "/companies/add",
-      "description": "Link one company: {\"CompanyNumber\": \"...\"}. Confirmed. One at a time - bulk payloads are rejected with 429."
+      "description": "Link one company: {\"CompanyNumber\": \"...\"} plus optional \"AuthenticationCode\". Confirmed: 201 on success, 422 if already associated, 404 if Companies House does not know the number, 429 for a bulk payload. One at a time."
     }
   }
 }

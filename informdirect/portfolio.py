@@ -51,15 +51,22 @@ class Portfolio:
 
     # -- membership -------------------------------------------------------- #
 
-    def add_company(self, company_number, *, extra=None):
+    def add_company(self, company_number, *, auth_code=None, extra=None):
         """Link one company to the account.
 
-        Confirmed against the live API: POST /companies/add with
-        {"CompanyNumber": "..."}. One company per call - a payload carrying a
-        list is refused with 429 ("not meant for bulk uploading"), so callers
-        adding several must loop and pace themselves.
+        Confirmed live: POST /companies/add with {"CompanyNumber": "..."}
+        returns 201. Without an authentication code the API says so explicitly
+        ("Company added with no authentication code."), so `auth_code` carries
+        the Companies House code when you have it - Inform Direct needs it
+        before it can file for the company.
+
+        One company per call: a payload carrying a list is refused with 429
+        ("not meant for bulk uploading"). Re-adding a company already on the
+        account raises AlreadyLinkedError (HTTP 422).
         """
         body = {"CompanyNumber": clean_company_number(company_number)}
+        if auth_code:
+            body["AuthenticationCode"] = auth_code
         if extra:
             body.update(extra)
         response = self.client.call("add_company", json_body=body)
