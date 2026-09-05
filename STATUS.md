@@ -1,47 +1,55 @@
 # Inform Direct integration — where this stands
 
 Last verified live against the sandbox: 5 September 2026.
+**All four operations confirmed working.**
 
-## Working
+## Confirmed endpoints
 
 | | |
 |---|---|
+| Sandbox | `https://sandbox-api.informdirect.co.uk` |
+| Production | `https://api.informdirect.co.uk` (each host refuses the other's key with 401) |
 | Authenticate | `POST /authenticate` `{"apiKey": "..."}` → `AccessToken` + `RefreshToken`, 15 min |
 | Get companies | `GET /companies` → `{"Companies": [...]}` |
-| Get company | `GET /companies/{companyNumber}` → same envelope, one entry |
-| Add company | `POST /companies/add` → 201. Verified with a real company number |
-| Membership reconciliation | `informdirect membership --planner rows.csv` |
+| Get company | `GET /companies/{companyNumber}` → the same envelope, one entry |
+| Add company | `POST /companies/add` `{"CompanyNumber", "AuthenticationCode"?}` → 201 |
+| Remove company | `PUT /companies/delete` `{"CompanyNumber"}` → 200 |
 
-Add company responses, all confirmed live:
+Two things worth knowing, both found the hard way:
+
+- **Remove is `PUT`, not `DELETE`.** `DELETE /companies/delete` answers 405
+  with `allow: PUT`. Add and remove are collection actions carrying the number
+  in the body, not the path.
+- **Company numbers must be the full 8 characters.** An unpadded one is
+  rejected with `400 The company number is invalid.` The client pads.
+
+Add company responses:
 
 | | |
 |---|---|
-| 201 | `Company added with no authentication code.` — added, but Inform Direct needs the Companies House code before it can file |
-| 422 | `Company already associated with this account.` — the desired state already holds, not a failure |
+| 201 | `Company added with no authentication code.` — Inform Direct needs the Companies House code before it can file |
+| 422 | `Company already associated with this account.` — desired state already holds, not a failure |
 | 404 | `Company could not be found.` — Companies House does not know that number |
 | 429 | bulk payload refused; add one at a time |
 
-Pass the Companies House code with `--auth-code`, or `add_company(n, auth_code=...)`.
+## Proving it for production access
 
-Sandbox `https://sandbox-api.informdirect.co.uk` · production
-`https://api.informdirect.co.uk` (each refuses the other's key with a 401).
+```bash
+python3 -m informdirect verify --confirm --company-number <a real one>
+```
 
-## Waiting on Inform Direct
+Exercises all four in one run and leaves the account as it found it (adds, then
+removes). Last run:
 
-Emailed support@informdirect.co.uk, 5 September 2026:
+```
+  [pass] Authenticate     access token obtained
+  [pass] Get companies    1 company(ies) returned
+  [pass] Add company      linked 05251849
+  [pass] Get company      05251849 ADOREUM LTD
+  [pass] Remove company   unlinked 05251849
+```
 
-1. **Remove company endpoint.** Not located — every candidate answers 405 with
-   `allow: GET`. When they reply, add it to `operations` in
-   `config/endpoints.json` and `remove_company()` works unchanged.
-2. **Production key**, once they have validated the sandbox calls. Three of
-   their four required operations are now exercised successfully — only Remove
-   company is outstanding, for want of an endpoint.
-
-Add company is resolved: it needed a real Companies House number. `05251849`
-(ADOREUM LTD) was added successfully in sandbox and is still linked there,
-since there is no remove endpoint to undo it with.
-
-## When the production key is enabled
+## Switching to production
 
 ```bash
 export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
@@ -49,19 +57,20 @@ export INFORMDIRECT_API_KEY="<production key>"
 python3 -m informdirect check
 ```
 
-Nothing else changes — the host and key are the only difference.
+Host and key are the only difference.
 
-## What this cannot do, and why
+## What this API cannot do, and why
 
-The company record is three fields: `CompanyNumber`, `Name`, `PublicUrl`. There
-are no dates and no officer, shareholder or filing endpoints. So:
+A company record is three fields: `CompanyNumber`, `Name`, `PublicUrl`. No
+dates, no status, and no officer, shareholder or filing endpoints. So:
 
 - the Limited Companies Tracker's **deadline feed still needs the manual
   portfolio export** — do not point `state/inform direct/` at this client;
 - the **SA director / close-company check stays in the browser**.
 
-Both code paths are written and tested and start working if those fields ever
-appear. `check` reports it if they do.
+Inform Direct have said richer company data is Phase 2, "could even allow you
+to retrieve all your company details". Both code paths are written and tested
+and start working if those fields appear; `check` reports it if they do.
 
 ## Housekeeping
 

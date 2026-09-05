@@ -24,8 +24,8 @@ ENDPOINTS = {
     "operations": {
         "list_companies": {"method": "GET", "path": "/companies"},
         "get_company": {"method": "GET", "path": "/companies/{company_id}"},
-        "add_company": {"method": "POST", "path": "/companies"},
-        "remove_company": {"method": "DELETE", "path": "/companies/{company_id}"},
+        "add_company": {"method": "POST", "path": "/companies/add"},
+        "remove_company": {"method": "PUT", "path": "/companies/delete"},
         "list_officers": {"method": "GET", "path": "/companies/{company_id}/officers"},
         "list_shareholders": {"method": "GET",
                               "path": "/companies/{company_id}/shareholders"},
@@ -334,8 +334,8 @@ class VerifyCommandTest(unittest.TestCase):
             if method == "POST":
                 return json_response({"companyNumber": "05550001",
                                       "companyName": "New Client Ltd"})
-            if method == "DELETE":
-                return json_response({}, status=204)
+            if method == "PUT":
+                return json_response({"Message": "Company deleted."})
             return routed(method, url, headers, body)
 
         code, output = self._run(
@@ -347,18 +347,18 @@ class VerifyCommandTest(unittest.TestCase):
                      "Get company", "Remove company"):
             self.assertIn(name, output)
         self.assertNotIn("FAIL", output)
-        self.assertIn("Every endpoint exercised returned a successful", output)
+        self.assertIn("All four endpoints returned successful", output)
         # The support email needs the last 6 of the key, and nothing more of it.
         self.assertIn("...123XYZ", output)
         self.assertNotIn("sandbox-abc123XYZ", output)
-        self.assertIn(("POST", "https://api.example.com/v1/companies"), seen)
-        self.assertIn(("DELETE", "https://api.example.com/v1/companies/05550001"), seen)
+        self.assertIn(("POST", "https://api.example.com/v1/companies/add"), seen)
+        self.assertIn(("PUT", "https://api.example.com/v1/companies/delete"), seen)
 
     def test_keep_skips_removal(self):
         def handler(method, url, headers=None, body=None):
             if method == "POST":
                 return json_response({"companyNumber": "05550001"})
-            if method == "DELETE":
+            if method == "PUT":
                 raise AssertionError("--keep must not delete")
             return routed(method, url, headers, body)
 
@@ -372,6 +372,8 @@ class VerifyCommandTest(unittest.TestCase):
         def handler(method, url, headers=None, body=None):
             if method == "POST":
                 return json_response({"message": "company already linked"}, 400)
+            if method == "PUT":
+                return json_response({"Message": "Company deleted."})
             return routed(method, url, headers, body)
 
         code, output = self._run(

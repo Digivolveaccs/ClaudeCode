@@ -71,7 +71,8 @@ class ExportTest(unittest.TestCase):
 class EndpointMapTest(unittest.TestCase):
     def test_shipped_map_declares_the_confirmed_operations(self):
         endpoints = EndpointMap.load(REPO_ROOT / "config" / "endpoints.json")
-        for name in ("list_companies", "get_company", "add_company"):
+        for name in ("list_companies", "get_company", "add_company",
+                     "remove_company"):
             self.assertTrue(endpoints.has(name), name)
         self.assertFalse(endpoints.is_provisional,
                          "paths were verified against the live API")
@@ -80,10 +81,11 @@ class EndpointMapTest(unittest.TestCase):
         self.assertEqual(endpoints.resolve("get_company", company_id="01234567"),
                          ("GET", "/companies/01234567"))
 
-    def test_remove_company_is_parked_as_unresolved(self):
-        raw = json.loads((REPO_ROOT / "config" / "endpoints.json").read_text())
-        self.assertIn("remove_company", raw["_unresolved"])
-        self.assertNotIn("remove_company", raw["operations"])
+    def test_remove_company_uses_put_on_the_collection_action(self):
+        """Confirmed live: PUT /companies/delete, not DELETE /companies/{n}."""
+        endpoints = EndpointMap.load(REPO_ROOT / "config" / "endpoints.json")
+        self.assertEqual(endpoints.resolve("remove_company"),
+                         ("PUT", "/companies/delete"))
 
     def test_officers_and_shareholders_are_parked_not_silently_wired_up(self):
         raw = json.loads((REPO_ROOT / "config" / "endpoints.json").read_text())

@@ -58,8 +58,8 @@ that is now one command.
 | Token life | 15 minutes; `Authorization: Bearer <token>`; `/refresh` on a 401, rotating both |
 | Get companies | `GET /companies` → `{"Companies": [ ... ]}` |
 | Get company | `GET /companies/{companyNumber}` → the same envelope, one entry |
-| Add company | `POST /companies/add` `{"CompanyNumber": "..."}` — **one at a time** |
-| Remove company | **not located** — see below |
+| Add company | `POST /companies/add` `{"CompanyNumber", "AuthenticationCode"?}` → 201 |
+| Remove company | `PUT /companies/delete` `{"CompanyNumber"}` → 200 |
 
 The company number must be the full 8 characters; an unpadded one is rejected
 with `400 The company number is invalid.` The client zero-pads automatically.
@@ -68,12 +68,16 @@ with `400 The company number is invalid.` The client zero-pads automatically.
 `429 "This end point is not meant for bulk uploading"`, so `membership --add`
 paces its calls and stops on a 429.
 
-**Remove company is unresolved.** Every candidate path — `DELETE /companies/{n}`,
-`POST /companies/remove`, `/delete`, `/unlink` and others — answers `405` with
-`allow: GET`. Probing stopped once the add endpoint started rate-limiting, to
-avoid getting the key throttled. It is one question for Inform Direct support,
-or one line off their docs page; drop the answer into `config/endpoints.json`
-and `remove_company()` works unchanged.
+**Remove is `PUT`, not `DELETE`.** `DELETE /companies/delete` answers 405 with
+`allow: PUT`, which is what gave it away. Add and remove are collection actions
+carrying the company number in the body rather than the path.
+
+Add company returns 201 on success, 422 `Company already associated with this
+account` when it is already linked (not a failure — the desired state holds),
+404 when Companies House does not know the number, and 429 for a bulk payload.
+The 201 message names an authentication code, so pass the Companies House code
+with `--auth-code` when you have it: Inform Direct needs it before they can
+file for the company.
 
 ## Running it without sitting at the machine
 
@@ -404,4 +408,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-218 tests, stdlib `unittest`, no network and no pip install.
+225 tests, stdlib `unittest`, no network and no pip install.

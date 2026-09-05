@@ -74,14 +74,17 @@ class Portfolio:
         return Company.from_api(payload) if payload else None
 
     def remove_company(self, company):
-        """Unlink a company. The endpoint has not been located yet.
+        """Unlink one company from the account. Returns True on success.
 
-        Every candidate path answers 405 with "allow: GET"; see `_unresolved`
-        in config/endpoints.json. Add the operation to the map once Inform
-        Direct confirm it and this starts working unchanged.
+        Confirmed live: PUT /companies/delete with {"CompanyNumber": "..."}
+        returns 200 {"Message": "Company deleted."}. The verb is PUT, not
+        DELETE - DELETE on that path answers 405 with "allow: PUT".
+
+        A company that is not on the account raises NotFoundError.
         """
+        number = company.company_number if isinstance(company, Company) else company
         self.client.call("remove_company",
-                         path_params={"company_id": _id_of(company)})
+                         json_body={"CompanyNumber": clean_company_number(number)})
         return True
 
     # -- officers and shares ---------------------------------------------- #

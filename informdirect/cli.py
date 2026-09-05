@@ -637,14 +637,9 @@ def _cmd_verify(args):
         step("Get company", None, skipped="no company number to look up")
 
     if args.confirm and not args.keep:
-        if not portfolio.client.endpoints.has("remove_company"):
-            step("Remove company", None,
-                 skipped="endpoint not located - see _unresolved in "
-                         "config/endpoints.json")
-        else:
-            step("Remove company",
-                 lambda: f"unlinked {args.company_number}"
-                 if portfolio.remove_company(args.company_number) else "")
+        step("Remove company",
+             lambda: f"unlinked {args.company_number}"
+             if portfolio.remove_company(args.company_number) else "")
     elif args.keep:
         step("Remove company", None, skipped="--keep was passed")
     else:
@@ -666,8 +661,7 @@ def _cmd_verify(args):
               "production key, so re-run with --confirm against sandbox.")
         return EXIT_EXCEPTIONS
 
-    print("\nEvery endpoint exercised returned a successful authenticated "
-          "response.")
+    print("\nAll four endpoints returned successful authenticated responses.")
     print("To request production access, email support@informdirect.co.uk with:")
     print("  - your organisation name")
     print(f"  - last 6 of the sandbox key used here: "

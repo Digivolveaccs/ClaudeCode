@@ -2,11 +2,14 @@
   "_status": "confirmed",
   "_confirmed_against": "https://sandbox-api.informdirect.co.uk - all three operations exercised successfully against a real company number",
   "_note": [
-    "Paths verified against the live sandbox, not guessed.",
+    "Every path verified against the live sandbox, not guessed.",
     "GET /companies and GET /companies/{companyNumber} both return the same",
     "envelope: {\"Companies\": [ ... ]}. The company number must be the full",
     "8-character form - an unpadded one is rejected with 400 'The company",
-    "number is invalid.'"
+    "number is invalid.'",
+    "",
+    "Add and remove are collection actions carrying the number in the body,",
+    "not the path: POST /companies/add and PUT /companies/delete."
   ],
   "_company_record_fields": [
     "CompanyNumber",
@@ -40,15 +43,6 @@
       "path": "/companies/{company_id}/filings"
     }
   },
-  "_unresolved": {
-    "remove_company": [
-      "Not located. POST/DELETE on /companies, /companies/{n},",
-      "/companies/remove, /companies/delete, /companies/unlink and others all",
-      "answer 405 with 'allow: GET'. Probing stopped after the add endpoint",
-      "returned 429 ('not meant for bulk uploading'), to avoid the key being",
-      "rate-limited further. Ask Inform Direct, or read it off the docs page."
-    ]
-  },
   "pagination": {
     "style": "auto",
     "page_param": "page",
@@ -74,6 +68,11 @@
       "method": "POST",
       "path": "/companies/add",
       "description": "Link one company: {\"CompanyNumber\": \"...\"} plus optional \"AuthenticationCode\". Confirmed: 201 on success, 422 if already associated, 404 if Companies House does not know the number, 429 for a bulk payload. One at a time."
+    },
+    "remove_company": {
+      "method": "PUT",
+      "path": "/companies/delete",
+      "description": "Unlink one company: {\"CompanyNumber\": \"...\"}. Confirmed: 200 {\"Message\": \"Company deleted.\"}; 404 if the company is not on the account. Note the verb is PUT, not DELETE - DELETE on this path returns 405 with allow: PUT."
     }
   }
 }
