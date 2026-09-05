@@ -72,6 +72,33 @@ none") and the CLI says so plainly.
 
 ---
 
+## Where this has to run
+
+This needs network access to `api.informdirect.co.uk`. A Claude Code session
+started from the **web** (claude.ai/code) runs in a locked-down cloud container
+whose egress allowlist does not include Inform Direct — the browser in that
+container is in the cloud too, so driving it does not help. That is why the
+setup below has not been run against the live API yet.
+
+Run it from **Claude Code on the Mac** instead — the desktop app or the CLI —
+where the network is yours and Claude can drive Chrome to log into Inform
+Direct. The whole thing is then one command:
+
+```bash
+export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
+export INFORMDIRECT_API_KEY="<sandbox key>"
+./scripts/setup.sh
+```
+
+`setup.sh` confirms the endpoint paths from the live spec, prints the resolved
+settings, and reports whether the API returns the fields the planner needs. It
+is read-only — adding and removing a company is `verify --confirm`, which it
+tells you to run next.
+
+(If web sessions should be able to reach Inform Direct, an admin can allowlist
+the host for this environment — the block is an organisation egress policy, not
+a limitation of the tool.)
+
 ## Setup
 
 ### 1. Generate a sandbox key
