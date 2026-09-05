@@ -408,3 +408,101 @@ class RedactedCheckTest(unittest.TestCase):
         self.assertIn("company number", output)
         self.assertIn("accounts due date", output)
         self.assertRegex(output, r"\d+/\d+")
+
+
+class DiagnoseTest(unittest.TestCase):
+    """Tell a missing field apart from a renamed one, without guessing."""
+
+    def _run(self, list_payload, detail_payload, argv=None):
+        from unittest import mock
+
+        from informdirect.cli import main
+
+        def handler(method, url, headers=None, body=None):
+            path = url.split("?", 1)[0]
+            if path.rstrip("/").endswith("/companies"):
+                return json_response(list_payload)
+            if detail_payload is None:
+                return json_response({"message": "nope"}, status=404)
+            return json_response(detail_payload)
+
+        portfolio = make_portfolio()
+        portfolio.client.transport = FakeTransport(handler=handler)
+        buffer = io.StringIO()
+        with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+            with redirect_stdout(buffer):
+                code = main(argv or ["diagnose"])
+        return code, buffer.getvalue()
+
+    def test_the_detail_endpoint_supplying_the_dates_is_visible(self):
+        code, output = self._run(
+            {"items": [{"id": "id-1", "companyNumber": "01234567",
+                        "companyName": "Sandbox One Limited"}]},
+            {"id": "id-1", "companyNumber": "01234567",
+             "companyStatus": "Active",
+             "nextAccountsMadeUpTo": "2025-03-31",
+             "accountsDueDate": "2025-12-31"},
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("list endpoint", output)
+        self.assertIn("detail endpoint", output)
+        # The concept map must show where each field actually lives.
+        self.assertIn("accountsDueDate (detail)", output)
+        self.assertIn("companyNumber (both)", output)
+
+    def test_a_renamed_date_field_is_surfaced_under_the_right_concept(self):
+        code, output = self._run(
+            {"items": [{"id": "x", "companyNumber": "01234567"}]},
+            {"id": "x", "accountingReferenceDate": "2025-03-31",
+             "filingDate": "2025-12-31"},
+        )
+        self.assertIn("accountingReferenceDate", output)
+        self.assertRegex(output, r"accounts year end\s+accountingReferenceDate")
+        self.assertRegex(output, r"accounts deadline\s+filingDate")
+
+    def test_genuinely_absent_dates_are_reported_as_nothing(self):
+        code, output = self._run(
+            {"items": [{"id": "x", "companyNumber": "01234567",
+                        "companyName": "Sandbox One Limited"}]},
+            {"id": "x", "companyNumber": "01234567",
+             "companyName": "Sandbox One Limited"},
+        )
+        self.assertRegex(output, r"accounts deadline\s+-- nothing --")
+        self.assertRegex(output, r"accounts year end\s+-- nothing --")
+
+    def test_nested_fields_are_reported_with_their_path(self):
+        code, output = self._run(
+            {"items": [{"id": "x"}]},
+            {"id": "x", "accounts": {"nextMadeUpTo": "2025-03-31",
+                                     "dueDate": "2025-12-31"}},
+        )
+        self.assertIn("accounts.nextMadeUpTo", output)
+        self.assertIn("accounts.dueDate", output)
+
+    def test_a_failing_detail_call_does_not_lose_the_list_findings(self):
+        code, output = self._run(
+            {"items": [{"id": "x", "companyNumber": "01234567"}]}, None)
+        self.assertEqual(code, 0)
+        self.assertIn("list endpoint", output)
+        self.assertIn("failed:", output)
+        self.assertIn("companyNumber (list)", output)
+
+    def test_empty_list_is_reported_rather_than_crashing(self):
+        code, output = self._run({"items": []}, None)
+        self.assertEqual(code, 2)
+        self.assertIn("no companies", output)
+
+    def test_out_writes_the_same_report_to_a_file(self):
+        import tempfile
+        from pathlib import Path as _P
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _P(tmp) / "diag.txt"
+            code, output = self._run(
+                {"items": [{"id": "x", "companyNumber": "01234567"}]},
+                {"id": "x", "accountsDueDate": "2025-12-31"},
+                argv=["diagnose", "--out", str(path)])
+            self.assertEqual(code, 0)
+            written = path.read_text()
+            self.assertIn("accountsDueDate", written)
+            self.assertIn("list endpoint", written)

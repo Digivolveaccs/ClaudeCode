@@ -28,13 +28,13 @@ fi
   echo "generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   echo "base_url : $BASE_URL"
   echo
-  echo "===== 1. endpoint paths from the live spec ====="
+  echo "===== 1. endpoint paths from the live spec (authenticated) ====="
   INFORMDIRECT_BASE_URL="$BASE_URL" python3 scripts/fetch_spec.py \
-    --spec "$BASE_URL" --write 2>&1
+    --spec "$BASE_URL" --auth --write 2>&1
   echo
   echo "===== 2. spec operations (if the spec was readable) ====="
   INFORMDIRECT_BASE_URL="$BASE_URL" python3 scripts/fetch_spec.py \
-    --spec "$BASE_URL" --list 2>&1 | head -60
+    --spec "$BASE_URL" --auth --list 2>&1 | head -60
   echo
   echo "===== 3. resolved settings (secrets masked) ====="
   INFORMDIRECT_BASE_URL="$BASE_URL" python3 -m informdirect config 2>&1
@@ -42,6 +42,9 @@ fi
   echo "===== 4. live check (company details withheld) ====="
   INFORMDIRECT_BASE_URL="$BASE_URL" python3 -m informdirect check --redact 2>&1
   echo "check exit status: $?"
+  echo
+  echo "===== 5. raw payloads (sandbox data - the real field names) ====="
+  INFORMDIRECT_BASE_URL="$BASE_URL" python3 -m informdirect diagnose 2>&1
 } > "$REPORT" 2>&1
 
 echo "wrote $REPORT"

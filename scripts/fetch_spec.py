@@ -322,6 +322,25 @@ def build_map(spec, existing):
     return result, operations, unmatched
 
 
+def _access_token():
+    """An access token from the configured credentials, for a spec behind auth."""
+    sys.path.insert(0, str(REPO_ROOT))
+    try:
+        from informdirect.auth import build_auth
+        from informdirect.config import Settings
+    except ImportError as exc:                       # pragma: no cover - layout
+        raise SystemExit(f"--auth needs the informdirect package: {exc}") from exc
+
+    settings = Settings.load().validate()
+    auth = build_auth(settings)
+    if not hasattr(auth, "token"):
+        raise SystemExit(
+            f"--auth needs a token-based auth_mode, not {settings.auth_mode!r}"
+        )
+    print(f"authenticating against {settings.resolved_auth_url()}")
+    return auth.token()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -334,6 +353,9 @@ def main(argv=None):
     parser.add_argument("--header", action="append", default=[], metavar="H",
                         help="extra request header, e.g. "
                              "--header 'Authorization: Bearer <token>'. Repeatable.")
+    parser.add_argument("--auth", action="store_true",
+                        help="authenticate with the configured API key first and "
+                             "send the access token - the spec is often behind it")
     args = parser.parse_args(argv)
 
     headers = {}
@@ -342,6 +364,9 @@ def main(argv=None):
             raise SystemExit(f"--header needs 'Name: value', got {raw!r}")
         name, value = raw.split(":", 1)
         headers[name.strip()] = value.strip()
+
+    if args.auth:
+        headers.setdefault("Authorization", "Bearer " + _access_token())
 
     spec = load_spec(args.spec, headers=headers or None)
     if not looks_like_spec(spec):

@@ -73,6 +73,14 @@ def build_parser():
     company.add_argument("number", help="company number or Inform Direct id")
     company.add_argument("--json", action="store_true", dest="as_json")
 
+    diagnose = sub.add_parser(
+        "diagnose",
+        help="dump the raw payloads so the real field names can be read off")
+    diagnose.add_argument("--company",
+                          help="company to fetch in detail (default: the first "
+                               "one the list returns)")
+    diagnose.add_argument("--out", help="also write the report to this file")
+
     authtest = sub.add_parser(
         "authtest",
         help="probe every plausible shape for the authentication request")
@@ -158,6 +166,8 @@ def _dispatch(args):
         return _cmd_companies(args)
     if args.command == "company":
         return _cmd_company(args)
+    if args.command == "diagnose":
+        return _cmd_diagnose(args)
     if args.command == "authtest":
         return _cmd_authtest(args)
     if args.command == "verify":
@@ -298,6 +308,134 @@ def _cmd_company(args):
             print(f"    {holder.name} {pct} ({holder.shares_held or '-'} "
                   f"{holder.share_class or 'shares'}, {kind})")
     return EXIT_OK
+
+
+# Concepts the planner needs, and the words that hint at each in a field name.
+CONCEPT_HINTS = (
+    ("company number", ("number", "crn", "registration")),
+    ("company name", ("name",)),
+    ("status", ("status", "state")),
+    ("accounts year end", ("madeup", "periodend", "yearend", "accountingreference",
+                           "arddate", "accountsdate")),
+    ("accounts deadline", ("due", "deadline", "filingdate")),
+    ("confirmation statement", ("confirmation", "annualreturn", "cs")),
+    ("incorporation", ("incorporat",)),
+    ("identifier", ("id", "guid", "key", "uid")),
+)
+
+
+def _cmd_diagnose(args):
+    """Show what the API actually returns, field by field.
+
+    The list endpoint and the detail endpoint often carry different fields - a
+    list of companies is commonly a summary, with the dates only on the detail
+    record. This fetches both and reports the keys in each, so a missing field
+    can be told apart from a renamed one without guessing.
+    """
+    portfolio = _portfolio(args)
+    lines = []
+
+    def emit(text=""):
+        print(text)
+        lines.append(text)
+
+    emit("=== list endpoint (Get companies) ===")
+    listed = []
+    for raw in portfolio.client.paginate("list_companies"):
+        listed.append(raw)
+        if len(listed) >= 3:
+            break
+
+    if not listed:
+        emit("  returned no companies - nothing to inspect")
+        return EXIT_EXCEPTIONS
+
+    emit(f"  {len(listed)} record(s) sampled")
+    emit("  raw payload of the first record:")
+    emit(_indent(json.dumps(listed[0], indent=2, default=str)))
+    list_keys = _all_keys(listed[0])
+    emit(f"  keys: {', '.join(sorted(list_keys)) or '(none)'}")
+
+    target = args.company or _first_identifier(listed[0])
+    emit()
+    emit(f"=== detail endpoint (Get company) for {target!r} ===")
+    detail_keys = set()
+    if not target:
+        emit("  no usable identifier in the list record - cannot fetch detail")
+    else:
+        try:
+            response = portfolio.client.call("get_company",
+                                             path_params={"company_id": target})
+            payload = response.json()
+            emit("  raw payload:")
+            emit(_indent(json.dumps(payload, indent=2, default=str)))
+            detail_keys = _all_keys(payload)
+            emit(f"  keys: {', '.join(sorted(detail_keys)) or '(none)'}")
+        except errors.InformDirectError as exc:
+            emit(f"  failed: {exc}")
+
+    emit()
+    emit("=== what maps to what the planner needs ===")
+    combined = {**{k: "list" for k in list_keys},
+                **{k: ("both" if k in list_keys else "detail") for k in detail_keys}}
+    for concept, hints in CONCEPT_HINTS:
+        matches = [f"{k} ({where})" for k, where in sorted(combined.items())
+                   if any(hint in _norm_key(k) for hint in hints)]
+        emit(f"  {concept:<24} {', '.join(matches) if matches else '-- nothing --'}")
+
+    extra = sorted(k for k in combined
+                   if not any(hint in _norm_key(k)
+                              for _, hints in CONCEPT_HINTS for hint in hints))
+    if extra:
+        emit(f"  {'(unmatched fields)':<24} {', '.join(extra)}")
+
+    if args.out:
+        from pathlib import Path as _Path
+
+        target_path = _Path(args.out).expanduser()
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("\n".join(lines) + "\n")
+        print(f"\nwritten to {target_path}")
+
+    return EXIT_OK
+
+
+def _all_keys(payload, prefix="", depth=0):
+    """Every key in a payload, dotted for nesting."""
+    found = set()
+    if isinstance(payload, list):
+        payload = payload[0] if payload else {}
+    if not isinstance(payload, dict) or depth > 3:
+        return found
+    for key, value in payload.items():
+        path = f"{prefix}{key}"
+        if isinstance(value, (dict, list)):
+            nested = _all_keys(value, f"{path}.", depth + 1)
+            found |= nested or {path}
+        else:
+            found.add(path)
+    return found
+
+
+def _first_identifier(record):
+    from .models import clean_company_number, flatten
+
+    table = flatten(record)
+    for name in ("id", "companyid", "informdirectid", "guid", "uid", "key"):
+        if table.get(name) not in (None, ""):
+            return str(table[name])
+    for name in ("companynumber", "registerednumber", "number"):
+        if table.get(name) not in (None, ""):
+            return clean_company_number(table[name])
+    return None
+
+
+def _norm_key(value):
+    return "".join(c for c in str(value).lower() if c.isalnum())
+
+
+def _indent(text, prefix="    "):
+    return "\n".join(prefix + line for line in text.splitlines())
 
 
 def _cmd_authtest(args):

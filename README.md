@@ -360,4 +360,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-189 tests, stdlib `unittest`, no network and no pip install.
+196 tests, stdlib `unittest`, no network and no pip install.
