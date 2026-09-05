@@ -131,7 +131,7 @@ class SpecDiscoveryTest(unittest.TestCase):
         """Patch _fetch so only the paths in `available` succeed."""
         from unittest import mock
 
-        def fake(url):
+        def fake(url, headers=None):
             for path, body in available.items():
                 if url.endswith(path):
                     return body
@@ -159,7 +159,8 @@ class SpecDiscoveryTest(unittest.TestCase):
         with mock.patch.object(fetch_spec, "_fetch",
                                return_value="{}") as fetched:
             fetch_spec._read_url("https://api.example.com/custom/spec.json")
-        fetched.assert_called_once_with("https://api.example.com/custom/spec.json")
+        fetched.assert_called_once_with("https://api.example.com/custom/spec.json",
+                                        headers=None)
 
     def test_nothing_found_explains_the_fallback(self):
         with self._with_fetch({}):
@@ -168,3 +169,106 @@ class SpecDiscoveryTest(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("/swagger/v1/swagger.json", message)
         self.assertIn("SwaggerHub", message)
+
+
+class SpecValidationTest(unittest.TestCase):
+    """A 200 is not proof of a spec - this API 200s its own 404 page."""
+
+    IIS_404 = ("The resource you are looking for has been removed, had its name "
+               "changed, or is temporarily unavailable.")
+
+    def _with_fetch(self, available):
+        from unittest import mock
+
+        def fake(url, headers=None):
+            for path, body in available.items():
+                if url.endswith(path):
+                    return body
+            raise SystemExit("HTTP 404")
+
+        return mock.patch.object(fetch_spec, "_fetch", side_effect=fake)
+
+    def test_looks_like_spec_rejects_non_specs(self):
+        self.assertTrue(fetch_spec.looks_like_spec(OPENAPI))
+        for bad in (None, "text", {}, {"paths": {}}, {"openapi": "3.0.1"},
+                    {"paths": "not a dict", "openapi": "3.0.1"}):
+            self.assertFalse(fetch_spec.looks_like_spec(bad), repr(bad))
+
+    def test_a_200_error_page_is_not_accepted_as_a_spec(self):
+        with self._with_fetch({"/swagger/v1/swagger.json": self.IIS_404}):
+            with self.assertRaises(SystemExit) as ctx:
+                fetch_spec._read_url("https://api.example.com")
+        message = str(ctx.exception)
+        self.assertIn("not JSON or YAML", message)
+        self.assertIn("resource you are looking for", message)
+
+    def test_probing_continues_past_a_200_error_page(self):
+        with self._with_fetch({"/swagger/v1/swagger.json": self.IIS_404,
+                               "/openapi.json": json.dumps(OPENAPI)}):
+            with redirect_stdout(io.StringIO()) as out:
+                text = fetch_spec._read_url("https://api.example.com")
+        self.assertEqual(json.loads(text)["info"]["title"], "Inform Direct API")
+        self.assertIn("/openapi.json", out.getvalue())
+
+    def test_spec_url_is_discovered_from_swagger_ui_init(self):
+        init_js = ('var configObject = {"urls":[{"url":"/swagger/v2/swagger.json",'
+                   '"name":"v2"}],"deepLinking":true};')
+        with self._with_fetch({"/swagger/swagger-ui-init.js": init_js,
+                               "/swagger/v2/swagger.json": json.dumps(OPENAPI)}):
+            with redirect_stdout(io.StringIO()) as out:
+                text = fetch_spec._read_url("https://api.example.com")
+        self.assertEqual(json.loads(text)["openapi"], "3.0.1")
+        self.assertIn("/swagger/v2/swagger.json", out.getvalue())
+
+    def test_spec_url_is_discovered_from_the_swagger_html(self):
+        html = '<script>SwaggerUIBundle({url: "/docs/openapi.json"})</script>'
+        with self._with_fetch({"/swagger/index.html": html,
+                               "/docs/openapi.json": json.dumps(OPENAPI)}):
+            with redirect_stdout(io.StringIO()):
+                text = fetch_spec._read_url("https://api.example.com")
+        self.assertEqual(json.loads(text)["openapi"], "3.0.1")
+
+    def test_spec_urls_in_extracts_and_dedupes(self):
+        found = fetch_spec._spec_urls_in(
+            'a "/swagger/v1/swagger.json" b "/swagger/v1/swagger.json" '
+            "c '/other/openapi.yaml' d \"/not-a-spec.txt\"")
+        self.assertEqual(found, ["/swagger/v1/swagger.json", "/other/openapi.yaml"])
+
+    def test_failure_message_lists_what_was_tried(self):
+        with self._with_fetch({}):
+            with self.assertRaises(SystemExit) as ctx:
+                fetch_spec._read_url("https://api.example.com")
+        message = str(ctx.exception)
+        self.assertIn("/swagger/v1/swagger.json", message)
+        self.assertIn("--header", message)
+        self.assertIn("SwaggerHub", message)
+
+    def test_headers_are_passed_through_to_every_fetch(self):
+        from unittest import mock
+        seen = []
+
+        def fake(url, headers=None):
+            seen.append(headers)
+            if url.endswith("/openapi.json"):
+                return json.dumps(OPENAPI)
+            raise SystemExit("HTTP 401")
+
+        with mock.patch.object(fetch_spec, "_fetch", side_effect=fake):
+            with redirect_stdout(io.StringIO()):
+                fetch_spec._read_url("https://api.example.com",
+                                     headers={"X-Api-Key": "k"})
+        self.assertTrue(all(h == {"X-Api-Key": "k"} for h in seen), seen)
+
+    def test_cli_header_flag_is_parsed(self):
+        from unittest import mock
+        with mock.patch.object(fetch_spec, "load_spec",
+                               return_value=OPENAPI) as loaded:
+            with redirect_stdout(io.StringIO()):
+                fetch_spec.main(["--spec", "https://x", "--header",
+                                 "Authorization: Bearer t"])
+        self.assertEqual(loaded.call_args.kwargs["headers"],
+                         {"Authorization": "Bearer t"})
+
+    def test_bad_header_flag_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            fetch_spec.main(["--spec", "https://x", "--header", "nocolon"])

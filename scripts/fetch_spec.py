@@ -22,6 +22,7 @@ import json
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,20 +66,46 @@ def norm(value):
     return re.sub(r"[^a-z0-9]+", "", str(value).lower())
 
 
-def load_spec(source):
-    text = _read(source)
+def parse_spec(text):
+    """Parse JSON or YAML into a dict, or None if it is neither."""
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, TypeError):
         pass
     try:
         import yaml
     except ImportError:
+        return None
+    try:
+        loaded = yaml.safe_load(text)
+    except Exception:
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
+def looks_like_spec(parsed):
+    """True only for something that really is an OpenAPI/Swagger document.
+
+    Servers do not reliably 404. This API answers a missing path with HTTP 200
+    and an IIS "the resource you are looking for has been removed" body, so a
+    successful fetch proves nothing on its own.
+    """
+    return (
+        isinstance(parsed, dict)
+        and isinstance(parsed.get("paths"), dict)
+        and ("openapi" in parsed or "swagger" in parsed)
+    )
+
+
+def load_spec(source, headers=None):
+    text = _read(source, headers=headers)
+    parsed = parse_spec(text)
+    if parsed is None:
         raise SystemExit(
-            "spec is not JSON and PyYAML is not installed. Either export the spec "
-            "as JSON, or: pip3 install pyyaml"
+            f"could not parse {source} as JSON or YAML. First 200 characters:\n"
+            f"  {text[:200]!r}"
         )
-    return yaml.safe_load(text)
+    return parsed
 
 
 # Where APIs commonly publish their spec, tried in order when given a bare host.
@@ -86,49 +113,116 @@ SPEC_CANDIDATES = (
     "/swagger/v1/swagger.json",
     "/swagger/v1/swagger.yaml",
     "/openapi.json",
+    "/openapi/v1.json",
     "/swagger.json",
     "/v1/swagger.json",
     "/api-docs",
+    "/api/swagger.json",
+)
+
+# Pages that embed the real spec URL when the guesses above miss. Swashbuckle
+# (ASP.NET) puts it in swagger-ui-init.js; most Swagger UI builds put it in the
+# HTML itself.
+UI_CANDIDATES = (
+    "/swagger/swagger-ui-init.js",
+    "/swagger/index.html",
+    "/swagger",
+    "/",
+)
+
+_SPEC_URL_RE = re.compile(
+    r"""["']([^"'\s]*(?:swagger|openapi)[^"'\s]*\.(?:json|yaml|yml))["']""",
+    re.IGNORECASE,
 )
 
 
-def _read(source):
+def _read(source, headers=None):
     source = str(source)
     if source.startswith(("http://", "https://")):
-        return _read_url(source)
+        return _read_url(source, headers=headers)
     path = Path(source).expanduser()
     if not path.is_file():
         raise SystemExit(f"spec not found: {path}")
     return path.read_text(encoding="utf-8")
 
 
-def _read_url(url):
-    # A bare host (or any URL not obviously pointing at a document) gets the
-    # common spec locations tried in turn, so "--spec https://api.example.com"
-    # is enough.
+def _read_url(url, headers=None):
+    """Fetch a spec from a URL, probing common locations for a bare host.
+
+    Every candidate is parsed and checked before it is accepted, because a 2xx
+    response is not evidence that a spec came back.
+    """
     if url.rstrip("/").endswith((".json", ".yaml", ".yml")) or "?" in url:
-        return _fetch(url)
+        return _fetch(url, headers=headers)
 
     root = url.rstrip("/")
-    errors = []
+    tried = []
+
     for candidate in SPEC_CANDIDATES:
+        body = _probe(root + candidate, tried, headers=headers)
+        if body is not None:
+            return body
+
+    # Nothing at the usual paths - ask the Swagger UI where its spec lives.
+    for ui_path in UI_CANDIDATES:
         try:
-            body = _fetch(root + candidate)
+            page = _fetch(root + ui_path, headers=headers)
         except SystemExit as exc:
-            errors.append(f"  {candidate}: {exc}")
+            tried.append(f"  {root}{ui_path}: {exc}")
             continue
-        print(f"found spec at {root}{candidate}")
-        return body
+        discovered = _spec_urls_in(page)
+        if not discovered:
+            tried.append(f"  {root}{ui_path}: no spec URL referenced")
+            continue
+        for reference in discovered:
+            absolute = urllib.parse.urljoin(root + ui_path, reference)
+            body = _probe(absolute, tried, headers=headers,
+                          note=f" (referenced by {ui_path})")
+            if body is not None:
+                return body
+
     raise SystemExit(
-        f"no OpenAPI spec found under {root}. Tried:\n" + "\n".join(errors)
-        + "\nDownload it from SwaggerHub (Export -> Download API -> JSON) and "
-        "pass the file instead."
+        f"no OpenAPI spec found under {root}. Tried:\n" + "\n".join(tried)
+        + "\n\nIf the spec needs authentication, pass it through:\n"
+        "    --header 'Authorization: Bearer <token>'\n"
+        "Otherwise download it from SwaggerHub (Export > Download API > JSON)\n"
+        "and pass the file instead of the host."
     )
 
 
-def _fetch(url):
+def _probe(url, tried, headers=None, note=""):
+    """Fetch one candidate, accepting it only if it really is a spec."""
+    try:
+        body = _fetch(url, headers=headers)
+    except SystemExit as exc:
+        tried.append(f"  {url}{note}: {exc}")
+        return None
+    parsed = parse_spec(body)
+    if looks_like_spec(parsed):
+        print(f"found spec at {url}")
+        return body
+    if parsed is None:
+        why = f"not JSON or YAML ({body.strip()[:60]!r})"
+    else:
+        why = "parsed, but has no 'paths' plus 'openapi'/'swagger'"
+    tried.append(f"  {url}{note}: {why}")
+    return None
+
+
+def _spec_urls_in(text):
+    """Spec URLs referenced by a Swagger UI page or its init script."""
+    seen = []
+    for match in _SPEC_URL_RE.findall(text or ""):
+        if match not in seen:
+            seen.append(match)
+    return seen
+
+
+def _fetch(url, headers=None):
     request = urllib.request.Request(
-        url, headers={"Accept": "application/json, application/yaml, */*"}
+        url,
+        headers={"Accept": "application/json, application/yaml, */*",
+                 **(headers or {})},
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -237,11 +331,24 @@ def main(argv=None):
                         help="write the endpoint map (otherwise just report)")
     parser.add_argument("--list", action="store_true",
                         help="list every operation in the spec and exit")
+    parser.add_argument("--header", action="append", default=[], metavar="H",
+                        help="extra request header, e.g. "
+                             "--header 'Authorization: Bearer <token>'. Repeatable.")
     args = parser.parse_args(argv)
 
-    spec = load_spec(args.spec)
-    if not isinstance(spec, dict) or "paths" not in spec:
-        raise SystemExit("that does not look like an OpenAPI/Swagger document")
+    headers = {}
+    for raw in args.header:
+        if ":" not in raw:
+            raise SystemExit(f"--header needs 'Name: value', got {raw!r}")
+        name, value = raw.split(":", 1)
+        headers[name.strip()] = value.strip()
+
+    spec = load_spec(args.spec, headers=headers or None)
+    if not looks_like_spec(spec):
+        raise SystemExit(
+            "that does not look like an OpenAPI/Swagger document (no 'paths' "
+            "plus 'openapi'/'swagger')"
+        )
 
     out_path = Path(args.out).expanduser()
     existing = {}
