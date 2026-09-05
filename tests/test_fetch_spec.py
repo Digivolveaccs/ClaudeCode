@@ -122,3 +122,49 @@ class SpecImportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpecDiscoveryTest(unittest.TestCase):
+    """`--spec https://api.example.com` should find the spec on its own."""
+
+    def _with_fetch(self, available):
+        """Patch _fetch so only the paths in `available` succeed."""
+        from unittest import mock
+
+        def fake(url):
+            for path, body in available.items():
+                if url.endswith(path):
+                    return body
+            raise SystemExit("HTTP 404")
+
+        return mock.patch.object(fetch_spec, "_fetch", side_effect=fake)
+
+    def test_bare_host_tries_the_common_locations(self):
+        body = json.dumps(OPENAPI)
+        with self._with_fetch({"/swagger/v1/swagger.json": body}):
+            with redirect_stdout(io.StringIO()) as out:
+                text = fetch_spec._read_url("https://api.example.com")
+        self.assertEqual(json.loads(text)["info"]["title"], "Inform Direct API")
+        self.assertIn("/swagger/v1/swagger.json", out.getvalue())
+
+    def test_falls_through_to_a_later_candidate(self):
+        body = json.dumps(OPENAPI)
+        with self._with_fetch({"/openapi.json": body}):
+            with redirect_stdout(io.StringIO()):
+                text = fetch_spec._read_url("https://api.example.com/")
+        self.assertEqual(json.loads(text)["openapi"], "3.0.1")
+
+    def test_an_explicit_document_url_is_not_probed(self):
+        from unittest import mock
+        with mock.patch.object(fetch_spec, "_fetch",
+                               return_value="{}") as fetched:
+            fetch_spec._read_url("https://api.example.com/custom/spec.json")
+        fetched.assert_called_once_with("https://api.example.com/custom/spec.json")
+
+    def test_nothing_found_explains_the_fallback(self):
+        with self._with_fetch({}):
+            with self.assertRaises(SystemExit) as ctx:
+                fetch_spec._read_url("https://api.example.com")
+        message = str(ctx.exception)
+        self.assertIn("/swagger/v1/swagger.json", message)
+        self.assertIn("SwaggerHub", message)

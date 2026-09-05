@@ -35,7 +35,9 @@ Standard library only. No `pip install` needed to run it.
 
 **Still unconfirmed**
 
-- The base URLs (sandbox and production) and the literal endpoint paths.
+- The literal endpoint paths. The host is `https://api.informdirect.co.uk`;
+  whether sandbox is the same host (key-selected) or a separate one is not
+  stated anywhere public.
 - The exact JSON field names in requests and responses — including the body
   shape for Add company.
 
@@ -85,9 +87,14 @@ $EDITOR config/settings.json      # gitignored
 Or keep the key out of files entirely:
 
 ```bash
-export INFORMDIRECT_BASE_URL="https://..."
+export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
 export INFORMDIRECT_API_KEY="..."
 ```
+
+The key selects the environment — the same host serves sandbox and live, and
+which one you get follows from the key you authenticate with. Worth confirming
+against the docs; if there is a separate sandbox host, set `base_url` to that
+while you are testing.
 
 Environment wins over the file, and command line flags win over both.
 
@@ -96,6 +103,15 @@ Environment wins over the file, and command line flags win over both.
 Download the OpenAPI spec from SwaggerHub (**Export → Download API → JSON**) and
 point the importer at it. It rewrites `config/endpoints.json` with the real paths
 and tells you the correct `base_url`:
+
+```bash
+python3 scripts/fetch_spec.py --spec https://api.informdirect.co.uk --write
+```
+
+Given a bare host it tries the usual spec locations (`/swagger/v1/swagger.json`,
+`/openapi.json` and friends) and tells you which one it found. If none of them
+are public, download the spec from SwaggerHub (**Export → Download API → JSON**)
+and pass the file instead:
 
 ```bash
 python3 scripts/fetch_spec.py --spec ~/Downloads/informdirect.json --write
@@ -270,4 +286,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-139 tests, stdlib `unittest`, no network and no pip install.
+143 tests, stdlib `unittest`, no network and no pip install.

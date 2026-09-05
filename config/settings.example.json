@@ -10,7 +10,7 @@
     "token. Start with a sandbox key; apply for a production key when ready."
   ],
 
-  "base_url": "https://REPLACE-ME",
+  "base_url": "https://api.informdirect.co.uk",
   "api_key": "",
 
   "auth_mode": "api_key_token",

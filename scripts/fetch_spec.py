@@ -21,6 +21,7 @@ import argparse
 import json
 import re
 import sys
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,17 +81,62 @@ def load_spec(source):
     return yaml.safe_load(text)
 
 
+# Where APIs commonly publish their spec, tried in order when given a bare host.
+SPEC_CANDIDATES = (
+    "/swagger/v1/swagger.json",
+    "/swagger/v1/swagger.yaml",
+    "/openapi.json",
+    "/swagger.json",
+    "/v1/swagger.json",
+    "/api-docs",
+)
+
+
 def _read(source):
-    if str(source).startswith(("http://", "https://")):
-        request = urllib.request.Request(
-            source, headers={"Accept": "application/json, application/yaml, */*"}
-        )
-        with urllib.request.urlopen(request, timeout=60) as response:
-            return response.read().decode("utf-8", errors="replace")
+    source = str(source)
+    if source.startswith(("http://", "https://")):
+        return _read_url(source)
     path = Path(source).expanduser()
     if not path.is_file():
         raise SystemExit(f"spec not found: {path}")
     return path.read_text(encoding="utf-8")
+
+
+def _read_url(url):
+    # A bare host (or any URL not obviously pointing at a document) gets the
+    # common spec locations tried in turn, so "--spec https://api.example.com"
+    # is enough.
+    if url.rstrip("/").endswith((".json", ".yaml", ".yml")) or "?" in url:
+        return _fetch(url)
+
+    root = url.rstrip("/")
+    errors = []
+    for candidate in SPEC_CANDIDATES:
+        try:
+            body = _fetch(root + candidate)
+        except SystemExit as exc:
+            errors.append(f"  {candidate}: {exc}")
+            continue
+        print(f"found spec at {root}{candidate}")
+        return body
+    raise SystemExit(
+        f"no OpenAPI spec found under {root}. Tried:\n" + "\n".join(errors)
+        + "\nDownload it from SwaggerHub (Export -> Download API -> JSON) and "
+        "pass the file instead."
+    )
+
+
+def _fetch(url):
+    request = urllib.request.Request(
+        url, headers={"Accept": "application/json, application/yaml, */*"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        raise SystemExit(f"HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise SystemExit(f"{exc.reason}") from exc
 
 
 def server_base(spec):
