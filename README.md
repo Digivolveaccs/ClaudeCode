@@ -179,6 +179,18 @@ in a smoke test.
 
 ### 3b. If authentication fails
 
+`authtest` reads the status codes as evidence: **401 means the request was
+understood and the credential refused; 400 means it was not understood at all.**
+That split names the right field without any documentation. Against the live API
+it showed `{"apiKey": ...}` in a JSON body drawing 401 while every other field
+name and every header drew 400 — so that shape is now the default, and a 401
+points at the key or the host rather than the request.
+
+When the shape is settled but the key is still refused, `authtest` retries the
+same shape against the likely sandbox hosts and paths, and if none work it
+drafts the question for Inform Direct support.
+
+
 The auth endpoint is confirmed live — it answers HTTP 400, not 404 — but its
 exact request shape is not documented publicly. `authtest` tries every plausible
 shape once and shows the server's response to each:
@@ -345,4 +357,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-168 tests, stdlib `unittest`, no network and no pip install.
+178 tests, stdlib `unittest`, no network and no pip install.

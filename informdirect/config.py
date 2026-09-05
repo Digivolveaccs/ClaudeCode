@@ -57,13 +57,16 @@ class Settings:
     auth_url: str = ""
     refresh_url: str = ""
     api_key_field: str = "apiKey"
-    """JSON field the API key is sent under when authenticating."""
+    """JSON field the API key is sent under. Confirmed against the live API:
+    {"apiKey": ...} draws a 401 (understood, credential refused) while every
+    other field name draws a 400 (not understood)."""
 
     refresh_token_field: str = "refreshToken"
     """JSON field the refresh token is sent under, and read back from."""
 
-    api_key_in: str = "auto"
-    """Where the API key goes on the auth request: 'body', 'header' or 'auto'."""
+    api_key_in: str = "body"
+    """Where the API key goes on the auth request: 'body', 'header' or 'auto'.
+    Confirmed as 'body' - every header form is rejected with a 400."""
 
     access_token_ttl: float = 900.0
     """Fallback token lifetime when the response does not say. Docs: 15 minutes."""

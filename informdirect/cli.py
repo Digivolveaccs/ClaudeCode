@@ -74,6 +74,8 @@ def build_parser():
         help="probe every plausible shape for the authentication request")
     authtest.add_argument("--auth-url",
                           help="override the endpoint to probe")
+    authtest.add_argument("--no-host-probe", action="store_true",
+                          help="stop after the shape probe; do not try other hosts")
 
     verify = sub.add_parser(
         "verify",
@@ -292,11 +294,12 @@ def _cmd_company(args):
 
 
 def _cmd_authtest(args):
-    """Try every plausible authentication request shape and show each response.
+    """Find the shape the authentication endpoint wants, then the environment.
 
-    The endpoint is live (it answers 400, not 404) but its request shape is not
-    documented publicly. One run either finds the shape that works, or collects
-    the server's own account of what is wrong with each.
+    A 401 means the request was understood and the credential refused; a 400
+    means it was not understood. That split identifies the right field name, and
+    once the shape is settled a 401 points at the key or the host instead - so
+    the same shape is then tried against the likely sandbox hosts.
     """
     from . import authprobe
 
@@ -313,30 +316,72 @@ def _cmd_authtest(args):
         authprobe.build_attempts(url, settings.api_key, settings.user_agent),
         timeout=settings.timeout,
     )
+    _print_attempts(attempts)
 
-    for attempt in attempts:
-        if attempt.error:
-            print(f"  [err ] {attempt.label:<32} {attempt.error}")
-            continue
-        mark = "WORKS" if attempt.ok else f"{attempt.status}"
-        print(f"  [{mark:^5}] {attempt.label:<32} {attempt.detail}")
+    result = authprobe.analyse(attempts)
+    verdict = result["verdict"]
 
-    winners = [a for a in attempts if a.ok]
-    if winners:
-        best = winners[0]
-        print(f"\n{len(winners)} shape(s) returned a token. Use this one:")
-        print(f"  {best.label}")
-        print(f"  put in config/settings.json:  {best.settings_hint()}")
+    if verdict == "working":
+        best = result["shape"]
+        print(f"\nAuthentication works. Put this in config/settings.json:")
+        print(f"  {best.settings_hint()}")
         if not best.refresh:
-            print("  note: no refresh token came back - check the response, since "
-                  "/refresh needs one")
+            print("  note: no refresh token came back - /refresh needs one, so "
+                  "check the response")
         return EXIT_OK
 
-    print("\nNothing returned a token. The responses above are the server's own "
-          "account of what it wanted -")
-    print("the field names in any 'validation failed' line are the answer. Paste "
-          "this output to Claude.")
+    if verdict == "no_shape_understood":
+        print("\nEvery shape returned 400 - none of them was understood.")
+        print("The endpoint may not be /authenticate. Paste this output to Claude.")
+        return EXIT_EXCEPTIONS
+
+    # 401 somewhere: the field name is settled, the credential is not accepted here.
+    shape = result["shape"]
+    print(f"\nRequest shape identified: {shape.label.strip()}")
+    print("  401 means the request was understood and the key refused;")
+    print("  400 means the field name was wrong. So the shape is right and the")
+    print("  problem is the key or the environment.")
+    print(f"  settings:  {shape.settings_hint()}")
+
+    if args.no_host_probe:
+        return EXIT_EXCEPTIONS
+
+    print("\nTrying that shape against the likely sandbox hosts and paths...")
+    env_attempts = authprobe.run(
+        authprobe.build_environment_attempts(
+            settings.api_key, shape, settings.user_agent),
+        timeout=min(settings.timeout, 10.0),
+    )
+
+    interesting = [a for a in env_attempts if a.ok or a.status in (401, 400, 403)]
+    if interesting:
+        _print_attempts(interesting)
+    else:
+        print("  (no host answered - they do not exist)")
+
+    working = [a for a in env_attempts if a.ok]
+    if working:
+        print(f"\nThis one authenticated: {working[0].label}")
+        print("  set INFORMDIRECT_BASE_URL to that host (minus the path).")
+        return EXIT_OK
+
+    print("\nNo sandbox host accepted the key either. That leaves:")
+    print("  - the key needs activating, or was regenerated")
+    print("  - the sandbox host is one not guessed here")
+    print("\nBoth are questions for support@informdirect.co.uk. Suggested wording:")
+    print('  "Our sandbox key (ending ' + settings.api_key[-6:] + ') returns 401')
+    print(f'   from POST {url} with body {{\"apiKey\": \"...\"}}.')
+    print('   Is there a separate sandbox base URL, or does the key need activating?"')
     return EXIT_EXCEPTIONS
+
+
+def _print_attempts(attempts):
+    for attempt in attempts:
+        if attempt.error:
+            print(f"  [err ] {attempt.label:<34} {attempt.error}")
+            continue
+        mark = "WORKS" if attempt.ok else f"{attempt.status}"
+        print(f"  [{mark:^5}] {attempt.label:<34} {attempt.detail}")
 
 
 def _cmd_verify(args):

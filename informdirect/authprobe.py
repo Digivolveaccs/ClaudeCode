@@ -145,6 +145,67 @@ def _pick(flat, names):
     return None
 
 
+# Hosts a sandbox key might belong to, when the production host rejects it.
+HOST_CANDIDATES = (
+    "https://sandbox-api.informdirect.co.uk",
+    "https://api-sandbox.informdirect.co.uk",
+    "https://sandbox.informdirect.co.uk",
+    "https://test-api.informdirect.co.uk",
+    "https://api-test.informdirect.co.uk",
+    "https://uat-api.informdirect.co.uk",
+    "https://api.informdirect.co.uk",
+)
+
+# Paths the auth endpoint might live under on any of those hosts.
+PATH_CANDIDATES = (
+    "/authenticate",
+    "/sandbox/authenticate",
+    "/v1/authenticate",
+    "/api/authenticate",
+    "/api/v1/authenticate",
+    "/auth/authenticate",
+    "/token",
+)
+
+
+def analyse(attempts):
+    """What the spread of status codes tells us about the request shape.
+
+    A 401 means the request was understood and the credential refused; a 400
+    means it was not understood at all. So a shape that draws 401 while the
+    others draw 400 has found the right field - the problem has moved on to the
+    key or the environment.
+    """
+    winners = [a for a in attempts if a.ok]
+    if winners:
+        return {"verdict": "working", "shape": winners[0]}
+
+    understood = [a for a in attempts if a.status == 401]
+    if understood:
+        # Prefer a JSON body shape - it is what the docs describe.
+        preferred = next((a for a in understood if a.kind[0] == "json"), understood[0])
+        return {"verdict": "shape_ok_key_refused", "shape": preferred,
+                "understood": understood}
+
+    return {"verdict": "no_shape_understood", "shape": None}
+
+
+def build_environment_attempts(api_key, shape, user_agent="informdirect-authprobe",
+                               hosts=HOST_CANDIDATES, paths=PATH_CANDIDATES):
+    """One attempt per host+path, all using the shape that got understood."""
+    attempts = []
+    for host in hosts:
+        for path in paths:
+            url = host.rstrip("/") + path
+            built = build_attempts(url, api_key, user_agent)
+            match = next((a for a in built if a.kind == shape.kind), None)
+            if match is None:
+                continue
+            match.label = f"{host.split('//')[1]}{path}"
+            attempts.append(match)
+    return attempts
+
+
 def _summarise(response, payload):
     if isinstance(payload, dict):
         errors = payload.get("errors")

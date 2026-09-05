@@ -17,7 +17,7 @@
   "auth_path": "/authenticate",
   "refresh_path": "/refresh",
   "api_key_field": "apiKey",
-  "api_key_in": "auto",
+  "api_key_in": "body",
 
   "page_size": 100,
   "timeout": 30,
