@@ -55,7 +55,11 @@ def build_parser():
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("check", help="prove credentials work and report field coverage")
+    check = sub.add_parser(
+        "check", help="prove credentials work and report field coverage")
+    check.add_argument("--redact", action="store_true",
+                       help="omit company names and numbers, leaving only counts "
+                            "- for output that will be shared or committed")
     sub.add_parser("config", help="print resolved settings, secrets masked")
 
     companies = sub.add_parser("companies", help="export the registry feed")
@@ -206,9 +210,12 @@ def _cmd_check(args):
         return EXIT_EXCEPTIONS
 
     print(f"companies : reachable, sampled {len(sample)}")
-    for company in sample[:3]:
-        print(f"  {company.company_number or '(no number)':<10} "
-              f"{company.name[:38]:<38} due {company.accounts_due or '-'}")
+    if getattr(args, "redact", False):
+        print("  (company details withheld - --redact)")
+    else:
+        for company in sample[:3]:
+            print(f"  {company.company_number or '(no number)':<10} "
+                  f"{company.name[:38]:<38} due {company.accounts_due or '-'}")
 
     print("\nfield coverage across the sample:")
     missing_critical = []

@@ -61,6 +61,21 @@ and tested; the operations sit parked in `config/endpoints.json` under
 if a later version adds them. Until then `close_company_view` returns `None` for
 them (as opposed to `[]`, which would mean "the API says there are none").
 
+## Running it without sitting at the machine
+
+The steps that need network access to Inform Direct can push their own results
+back to the branch, so nobody has to relay terminal output:
+
+```bash
+export INFORMDIRECT_API_KEY="<sandbox key>"
+./scripts/report.sh
+```
+
+It confirms the endpoint paths from the live spec, runs the field-coverage
+check, writes `config/live-report.txt` and pushes it. Read-only against the API.
+Company names and numbers are withheld from the report — only counts are kept —
+and it refuses to push if the API key appears anywhere in the output.
+
 ## Where this has to run
 
 This needs network access to `api.informdirect.co.uk`. A Claude Code session
@@ -345,4 +360,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-186 tests, stdlib `unittest`, no network and no pip install.
+189 tests, stdlib `unittest`, no network and no pip install.

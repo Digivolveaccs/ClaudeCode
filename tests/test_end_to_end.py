@@ -374,3 +374,37 @@ class VerifyCommandTest(unittest.TestCase):
         self.assertIn("FAIL", output)
         self.assertIn("company already linked", output)
         self.assertIn("1 endpoint(s) failed: Add company", output)
+
+
+class RedactedCheckTest(unittest.TestCase):
+    """--redact keeps field coverage but drops anything client-identifying."""
+
+    def _run(self, argv):
+        from unittest import mock
+
+        from informdirect.cli import main
+
+        portfolio = make_portfolio()
+        buffer = io.StringIO()
+        with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+            with redirect_stdout(buffer):
+                code = main(argv)
+        return code, buffer.getvalue()
+
+    def test_redact_withholds_names_and_numbers(self):
+        _, output = self._run(["check", "--redact"])
+        self.assertIn("field coverage", output)
+        self.assertIn("company details withheld", output)
+        self.assertNotIn("Browns Garage", output)
+        self.assertNotIn("01234567", output)
+        self.assertNotIn("PMC Floors", output)
+
+    def test_without_redact_the_sample_is_shown(self):
+        _, output = self._run(["check"])
+        self.assertIn("Browns Garage", output)
+
+    def test_coverage_counts_survive_redaction(self):
+        _, output = self._run(["check", "--redact"])
+        self.assertIn("company number", output)
+        self.assertIn("accounts due date", output)
+        self.assertRegex(output, r"\d+/\d+")
