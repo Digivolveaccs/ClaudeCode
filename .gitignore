@@ -15,3 +15,7 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+
+# Point-in-time run output - the README carries the confirmed facts instead
+config/live-report.txt
+config/spec-probe/
