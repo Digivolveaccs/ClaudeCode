@@ -169,12 +169,31 @@ class OAuth2ClientCredentials:
 
 
 def _error_detail(response):
+    """The most specific thing the server said about why it refused.
+
+    ASP.NET Core answers a bad request with RFC 7807 ProblemDetails - a `title`
+    plus an `errors` map naming each offending field. That map is the single
+    most useful thing when the request shape is still unconfirmed, so it is
+    surfaced rather than dropped.
+    """
     payload = response.json()
     if isinstance(payload, dict):
         for key in ("error_description", "error", "message", "detail"):
             if payload.get(key):
                 return str(payload[key])
-    return response.text[:200]
+        errors = payload.get("errors")
+        if isinstance(errors, dict) and errors:
+            parts = []
+            for field, problems in list(errors.items())[:5]:
+                if isinstance(problems, (list, tuple)):
+                    problems = "; ".join(str(x) for x in problems)
+                parts.append(f"{field}: {problems}")
+            title = payload.get("title") or "validation failed"
+            return f"{title} ({'; '.join(parts)})"
+        if payload.get("title"):
+            return str(payload["title"])
+    text = response.text.strip()
+    return text[:300] if text else "(empty response body)"
 
 
 class TokenCache:
@@ -341,7 +360,7 @@ class ApiKeyTokenAuth:
     def _authenticate(self):
         settings = self._settings
         styles = ["body", "header"] if self._key_in == "auto" else [self._key_in]
-        last_error = None
+        attempts = []
         for style in styles:
             headers = {"Accept": "application/json",
                        "User-Agent": settings.user_agent}
@@ -359,11 +378,16 @@ class ApiKeyTokenAuth:
                 if self._key_in == "auto":
                     self._key_in = style
                 return self._parse_tokens(response, "authentication")
-            last_error = AuthError(
-                f"authentication failed (api key in {style}): HTTP "
-                f"{response.status} {_error_detail(response)}"
+            attempts.append(
+                f"api key in {style}: HTTP {response.status} "
+                f"{_error_detail(response)}"
             )
-        raise last_error or AuthError("authentication failed")
+        raise AuthError(
+            "authentication failed. Each request shape tried:\n  "
+            + "\n  ".join(attempts)
+            + "\n\nRun `python3 -m informdirect authtest` to probe every "
+              "plausible shape and see the full response to each."
+        )
 
     def _refresh_tokens(self):
         settings = self._settings

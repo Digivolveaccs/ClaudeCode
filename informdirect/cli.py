@@ -69,6 +69,12 @@ def build_parser():
     company.add_argument("number", help="company number or Inform Direct id")
     company.add_argument("--json", action="store_true", dest="as_json")
 
+    authtest = sub.add_parser(
+        "authtest",
+        help="probe every plausible shape for the authentication request")
+    authtest.add_argument("--auth-url",
+                          help="override the endpoint to probe")
+
     verify = sub.add_parser(
         "verify",
         help="exercise all four endpoints - the gate for a production key")
@@ -146,6 +152,8 @@ def _dispatch(args):
         return _cmd_companies(args)
     if args.command == "company":
         return _cmd_company(args)
+    if args.command == "authtest":
+        return _cmd_authtest(args)
     if args.command == "verify":
         return _cmd_verify(args)
     if args.command == "reconcile":
@@ -281,6 +289,54 @@ def _cmd_company(args):
             print(f"    {holder.name} {pct} ({holder.shares_held or '-'} "
                   f"{holder.share_class or 'shares'}, {kind})")
     return EXIT_OK
+
+
+def _cmd_authtest(args):
+    """Try every plausible authentication request shape and show each response.
+
+    The endpoint is live (it answers 400, not 404) but its request shape is not
+    documented publicly. One run either finds the shape that works, or collects
+    the server's own account of what is wrong with each.
+    """
+    from . import authprobe
+
+    settings = _settings(args).validate()
+    url = args.auth_url or settings.resolved_auth_url()
+    if not settings.api_key:
+        print("no api_key set - nothing to probe with", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"probing {url}")
+    print(f"key     ...{settings.api_key[-6:]}\n")
+
+    attempts = authprobe.run(
+        authprobe.build_attempts(url, settings.api_key, settings.user_agent),
+        timeout=settings.timeout,
+    )
+
+    for attempt in attempts:
+        if attempt.error:
+            print(f"  [err ] {attempt.label:<32} {attempt.error}")
+            continue
+        mark = "WORKS" if attempt.ok else f"{attempt.status}"
+        print(f"  [{mark:^5}] {attempt.label:<32} {attempt.detail}")
+
+    winners = [a for a in attempts if a.ok]
+    if winners:
+        best = winners[0]
+        print(f"\n{len(winners)} shape(s) returned a token. Use this one:")
+        print(f"  {best.label}")
+        print(f"  put in config/settings.json:  {best.settings_hint()}")
+        if not best.refresh:
+            print("  note: no refresh token came back - check the response, since "
+                  "/refresh needs one")
+        return EXIT_OK
+
+    print("\nNothing returned a token. The responses above are the server's own "
+          "account of what it wanted -")
+    print("the field names in any 'validation failed' line are the answer. Paste "
+          "this output to Claude.")
+    return EXIT_EXCEPTIONS
 
 
 def _cmd_verify(args):

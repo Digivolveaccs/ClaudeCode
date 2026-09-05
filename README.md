@@ -177,6 +177,25 @@ python3 -m informdirect check     # gets a token, then reports field coverage
 `check` exits `2` if a field the planner needs is missing, so it is safe to put
 in a smoke test.
 
+### 3b. If authentication fails
+
+The auth endpoint is confirmed live — it answers HTTP 400, not 404 — but its
+exact request shape is not documented publicly. `authtest` tries every plausible
+shape once and shows the server's response to each:
+
+```bash
+python3 -m informdirect authtest
+```
+
+```
+  [ 400 ] JSON body  {apiKey}     One or more validation errors occurred. -- apiKey: The apiKey field is required.
+  [WORKS] header     X-Api-Key    ...
+```
+
+If one works it tells you exactly what to put in `config/settings.json`. If none
+do, the validation messages name the field the server actually wants. It only
+authenticates — nothing is added or removed.
+
 ### 4. Earn the production key
 
 Inform Direct only enable a production key once their technical team have seen
@@ -326,4 +345,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-153 tests, stdlib `unittest`, no network and no pip install.
+168 tests, stdlib `unittest`, no network and no pip install.
