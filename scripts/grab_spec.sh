@@ -11,7 +11,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BASE="${INFORMDIRECT_BASE_URL:-https://api.informdirect.co.uk}"
+BASE="${INFORMDIRECT_BASE_URL:-https://sandbox-api.informdirect.co.uk}"
 OUT=config/spec-probe
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 mkdir -p "$OUT"

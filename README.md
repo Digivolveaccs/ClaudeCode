@@ -18,59 +18,48 @@ Standard library only. No `pip install` needed to run it.
 
 ---
 
-## What is confirmed, and what is not
+## Confirmed against the live API
 
-**Confirmed from Inform Direct's own documentation**
+| | |
+|---|---|
+| Sandbox base URL | `https://sandbox-api.informdirect.co.uk` |
+| Production base URL | `https://api.informdirect.co.uk` |
+| Auth request | `POST {base_url}/authenticate` with `{"apiKey": "..."}` |
+| Auth response | `{"AccessToken": "<JWT>", "RefreshToken": "..."}` |
+| Access token life | 15 minutes; `/refresh` on a 401, rotating both tokens |
+| Request auth | `Authorization: Bearer {AccessToken}` |
+| Operations | Get companies, Get company, Add company, Remove company |
 
-- **Endpoints**: Add company, Remove company, Get company, Get companies. That
-  is the whole API.
-- **Auth**: POST your API key to the authentication endpoint; you get back an
-  **access token valid for 15 minutes** plus a **refresh token**. Send the
-  access token as `Authorization: Bearer {token}` on every request. When a
-  request returns 401, call `/refresh` with the stored refresh token — which
-  returns a new access token *and a new refresh token*, so the stored one is
-  rotated each time. Implemented as `auth_mode: "api_key_token"`, the default.
-- **Keys**: sandbox keys are self-serve; production access is granted by Inform
-  Direct's technical team after they validate your sandbox calls.
+The host and the key have to match: the production host answers a sandbox key
+with 401, which is how the sandbox host was found. Response field names come
+back PascalCase (`AccessToken`, not `access_token`); the parser matches field
+names case- and punctuation-insensitively, so both work.
 
 **Still unconfirmed**
 
-- The literal endpoint paths. The host is `https://api.informdirect.co.uk`;
-  whether sandbox is the same host (key-selected) or a separate one is not
-  stated anywhere public.
-- The exact JSON field names in requests and responses — including the body
-  shape for Add company.
-
-`config/endpoints.json` therefore ships marked `"_status": "provisional"` and
-the CLI warns while that is true. Step 2 below clears it.
-
-**The open question that matters**
-
-The API returns *"high-level company details"*, and nothing published says
-whether that includes the **accounts year end and filing deadline** — which is
-exactly what the planner feed and the reconciliation run on. So `check` reports
-it rather than leaving you to find out later:
+- The literal paths for the four company operations, and the request body for
+  Add company. `config/endpoints.json` is marked `"_status": "provisional"`
+  until `fetch_spec` confirms them.
+- Whether "high-level company details" includes the **accounts year end and
+  filing deadline** — the thing the planner feed and reconciliation run on.
+  `check` answers this in one command:
 
 ```
 field coverage across the sample:
   [ok  ] company number                   25/25 (needed by the planner)
-  [ok  ] company name                     25/25 (needed by the planner)
   [NONE] accounts due date                 0/25 (needed by the planner)
 ```
 
-If those fields are missing, it is usually a naming mismatch rather than an
-absent feature — `companies --json` dumps each company's raw payload, and adding
-the real name to the aliases in `models.py` makes it map.
+If those come back empty it is usually a naming mismatch, not an absent
+feature — `companies --json` dumps each raw payload, and adding the real name to
+the aliases in `models.py` makes it map.
 
-**Officers, shareholders and filing history are not in the API.** So the SA
-director / close-company check can't come off the browser. That code is written
-and tested; the three operations sit parked in `config/endpoints.json` under
-`_not_offered_by_the_api`, and moving them into `operations` is all it would
-take if a later version adds them. Until then `close_company_view` returns
-`None` for them (as opposed to `[]`, which would mean "the API says there are
-none") and the CLI says so plainly.
-
----
+**Officers, shareholders and filing history are not in the API.** The SA
+director / close-company check cannot come off the browser. That code is written
+and tested; the operations sit parked in `config/endpoints.json` under
+`_not_offered_by_the_api`, and moving them into `operations` is all it would take
+if a later version adds them. Until then `close_company_view` returns `None` for
+them (as opposed to `[]`, which would mean "the API says there are none").
 
 ## Where this has to run
 
@@ -85,7 +74,7 @@ where the network is yours and Claude can drive Chrome to log into Inform
 Direct. The whole thing is then one command:
 
 ```bash
-export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
+export INFORMDIRECT_BASE_URL="https://sandbox-api.informdirect.co.uk"
 export INFORMDIRECT_API_KEY="<sandbox key>"
 ./scripts/setup.sh
 ```
@@ -114,14 +103,13 @@ $EDITOR config/settings.json      # gitignored
 Or keep the key out of files entirely:
 
 ```bash
-export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
+export INFORMDIRECT_BASE_URL="https://sandbox-api.informdirect.co.uk"
 export INFORMDIRECT_API_KEY="..."
 ```
 
-The key selects the environment — the same host serves sandbox and live, and
-which one you get follows from the key you authenticate with. Worth confirming
-against the docs; if there is a separate sandbox host, set `base_url` to that
-while you are testing.
+Sandbox and production are **separate hosts**, and each rejects the other's key
+with a 401. Swap `base_url` to `https://api.informdirect.co.uk` when your
+production key is enabled.
 
 Environment wins over the file, and command line flags win over both.
 
@@ -357,4 +345,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-182 tests, stdlib `unittest`, no network and no pip install.
+186 tests, stdlib `unittest`, no network and no pip install.

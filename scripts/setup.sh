@@ -12,7 +12,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-BASE_URL="${INFORMDIRECT_BASE_URL:-https://api.informdirect.co.uk}"
+BASE_URL="${INFORMDIRECT_BASE_URL:-https://sandbox-api.informdirect.co.uk}"
 
 if [ -z "${INFORMDIRECT_API_KEY:-}" ] && [ ! -f config/settings.json ]; then
   cat >&2 <<'MSG'

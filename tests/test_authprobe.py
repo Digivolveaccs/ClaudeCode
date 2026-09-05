@@ -352,3 +352,59 @@ class TwoPhaseProbeTest(unittest.TestCase):
             on_host=seen.append)
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].status, 401)
+
+
+class LiveResponseShapeTest(unittest.TestCase):
+    """The shape the sandbox actually returned: PascalCase, JWT access token."""
+
+    LIVE = {
+        "AccessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJ4In0.sig",
+        "RefreshToken": "6f0c9a1e-refresh",
+    }
+
+    def test_authprobe_reads_pascalcase_tokens(self):
+        transport = FakeTransport(handler=lambda *a: json_response(self.LIVE))
+        results = authprobe.run(authprobe.build_attempts(URL, KEY),
+                                transport=transport)
+        self.assertTrue(results[0].ok)
+        self.assertTrue(results[0].token.startswith("eyJ"))
+        self.assertEqual(results[0].refresh, "6f0c9a1e-refresh")
+
+    def test_the_auth_flow_accepts_the_live_response(self):
+        from informdirect.auth import ApiKeyTokenAuth
+        from informdirect.config import Settings
+
+        settings = Settings.load(
+            base_url="https://sandbox-api.informdirect.co.uk",
+            api_key=KEY, cache_tokens=False)
+        transport = FakeTransport([json_response(self.LIVE)])
+        auth = ApiKeyTokenAuth(settings, transport=transport)
+
+        headers = auth.apply({})
+        self.assertEqual(headers["Authorization"], "Bearer " + self.LIVE["AccessToken"])
+        self.assertEqual(transport.calls[0]["url"],
+                         "https://sandbox-api.informdirect.co.uk/authenticate")
+        self.assertEqual(json.loads(transport.calls[0]["body"]), {"apiKey": KEY})
+
+    def test_expiry_defaults_to_fifteen_minutes_when_absent(self):
+        from informdirect.auth import EXPIRY_SKEW, ApiKeyTokenAuth
+        from informdirect.config import Settings
+
+        clock = type("C", (), {"now": 1000.0, "__call__": lambda s: s.now})()
+        settings = Settings.load(base_url="https://sandbox-api.informdirect.co.uk",
+                                 api_key=KEY, cache_tokens=False)
+        auth = ApiKeyTokenAuth(settings, transport=FakeTransport(
+            [json_response(self.LIVE)]), clock=clock)
+        auth.token()
+        self.assertEqual(auth._expires_at, 1000.0 + 900.0 - EXPIRY_SKEW)
+
+    def test_shipped_example_settings_match_what_worked(self):
+        from pathlib import Path
+        example = json.loads(
+            (Path(__file__).resolve().parent.parent
+             / "config" / "settings.example.json").read_text())
+        self.assertEqual(example["base_url"],
+                         "https://sandbox-api.informdirect.co.uk")
+        self.assertEqual(example["api_key_in"], "body")
+        self.assertEqual(example["api_key_field"], "apiKey")
+        self.assertEqual(example["auth_path"], "/authenticate")

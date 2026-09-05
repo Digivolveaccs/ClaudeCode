@@ -5,12 +5,18 @@
     "INFORMDIRECT_BASE_URL, INFORMDIRECT_API_KEY, and so on.",
     "Prefer environment variables for the key on shared machines.",
     "",
-    "auth_mode 'api_key_token' is Inform Direct's documented flow: the API key",
-    "is POSTed to the auth endpoint for a 15-minute access token plus a refresh",
-    "token. Start with a sandbox key; apply for a production key when ready."
+    "CONFIRMED against the live API:",
+    "  sandbox     https://sandbox-api.informdirect.co.uk",
+    "  production  https://api.informdirect.co.uk",
+    "A sandbox key is refused with 401 by the production host, and vice versa -",
+    "the host and the key have to match. Swap base_url when you go live.",
+    "",
+    "Auth is POST {base_url}/authenticate with {\"apiKey\": \"...\"}, which",
+    "returns {\"AccessToken\": ..., \"RefreshToken\": ...}. The access token",
+    "lasts 15 minutes; /refresh rotates both."
   ],
 
-  "base_url": "https://api.informdirect.co.uk",
+  "base_url": "https://sandbox-api.informdirect.co.uk",
   "api_key": "",
 
   "auth_mode": "api_key_token",
