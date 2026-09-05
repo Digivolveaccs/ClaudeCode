@@ -224,22 +224,29 @@ class CheckCommandTest(unittest.TestCase):
                 code = main(["check"])
         return code, buffer.getvalue()
 
-    def test_reports_ok_when_the_deadline_fields_are_returned(self):
-        code, output = self._run({"items": [
-            {"companyNumber": "1234567", "companyName": "A Ltd",
-             "companyStatus": "Active", "nextAccountsMadeUpTo": "2025-03-31",
-             "accountsDueDate": "2025-12-31"}]})
-        self.assertEqual(code, 0)
-        self.assertIn("Everything the planner feed and reconciliation need", output)
+    def test_the_live_shape_is_reported_as_working_with_its_limits_stated(self):
+        """Number and name only - which is what the API actually returns."""
+        code, output = self._run({"Companies": [
+            {"CompanyNumber": "01234567", "Name": "SANDBOX ONE LIMITED",
+             "PublicUrl": "/c/x"}]})
+        self.assertEqual(code, 0, "this is the expected shape, not a failure")
+        self.assertIn("not returned by this API", output)
+        self.assertIn("cannot drive the deadline feed", output)
+        self.assertIn("membership", output)
 
-    def test_flags_the_planner_fields_the_api_does_not_return(self):
-        code, output = self._run({"items": [
-            {"companyNumber": "1234567", "companyName": "A Ltd",
-             "companyStatus": "Active"}]})
-        self.assertEqual(code, 2)
+    def test_dates_appearing_later_would_be_reported_as_a_change(self):
+        code, output = self._run({"Companies": [
+            {"CompanyNumber": "01234567", "Name": "A Ltd",
+             "companyStatus": "Active", "accountsDueDate": "2025-12-31"}]})
+        self.assertEqual(code, 0)
+        self.assertIn("returned fields it was not expected to", output)
         self.assertIn("accounts due date", output)
-        self.assertIn("NONE", output)
-        self.assertIn("raw", output, "must point at how to diagnose it")
+
+    def test_a_missing_company_name_is_still_a_real_problem(self):
+        code, output = self._run({"Companies": [{"CompanyNumber": "01234567"}]})
+        self.assertEqual(code, 2)
+        self.assertIn("company name", output)
+        self.assertIn("diagnose", output)
 
 
 class ParkedOperationsTest(unittest.TestCase):
@@ -333,14 +340,14 @@ class VerifyCommandTest(unittest.TestCase):
 
         code, output = self._run(
             ["verify", "--confirm", "--company-number", "05550001",
-             "--auth-code", "AB12CD"], handler=handler)
+             ], handler=handler)
 
         self.assertEqual(code, 0)
         for name in ("Authenticate", "Get companies", "Add company",
                      "Get company", "Remove company"):
             self.assertIn(name, output)
         self.assertNotIn("FAIL", output)
-        self.assertIn("All four endpoints returned successful", output)
+        self.assertIn("Every endpoint exercised returned a successful", output)
         # The support email needs the last 6 of the key, and nothing more of it.
         self.assertIn("...123XYZ", output)
         self.assertNotIn("sandbox-abc123XYZ", output)

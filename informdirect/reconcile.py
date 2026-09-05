@@ -34,6 +34,11 @@ OK = "ok"
 
 SUBMITTED_STAGE = "8-Submitted"
 
+# Membership reconciliation - what the API can actually answer.
+NOT_IN_INFORMDIRECT = "not_in_informdirect"
+NOT_IN_PLANNER = "not_in_planner"
+NAME_MISMATCH = "name_mismatch"
+
 # Headers the planner might use, matched the same fuzzy way as the tracker.
 ROW_ALIASES = {
     "company_number": ("company number", "companynumber", "number", "crn",
@@ -89,7 +94,8 @@ class Action:
 
     @property
     def needs_human(self):
-        return self.kind in (DISSOLVED, INSOLVENT, UNMATCHED, AHEAD, CHARITY)
+        return self.kind in (DISSOLVED, INSOLVENT, UNMATCHED, AHEAD, CHARITY,
+                             NOT_IN_INFORMDIRECT, NOT_IN_PLANNER, NAME_MISMATCH)
 
     def as_dict(self):
         return {
@@ -394,3 +400,102 @@ def write_report_csv(result, path):
 
 def _kv(mapping):
     return "; ".join(f"{k}={v}" for k, v in mapping.items() if v not in (None, ""))
+
+
+# --- membership reconciliation ------------------------------------------- #
+#
+# The API returns a company number, a name and a portal link - and nothing
+# else. No year end, no filing deadline, no status. So it cannot drive the
+# deadline reconciliation above; that still needs the portfolio export. What it
+# can answer is membership: which client companies are actually linked to the
+# Inform Direct account, and which are missing from one side or the other.
+
+
+def reconcile_membership(companies, rows):
+    """Compare the Inform Direct portfolio against the planner's companies.
+
+    Returns the same ReconResult shape, so the same reporting works.
+    """
+    result = ReconResult(registry_count=len(companies), row_count=len(rows))
+
+    in_api = {}
+    for company in companies:
+        if company.company_number:
+            in_api.setdefault(company.company_number, company)
+
+    seen = set()
+    for row in rows:
+        if row.is_charity:
+            result.actions.append(Action(
+                kind=CHARITY, company_number=row.company_number,
+                company_name=row.company_name, row_number=row.row_number,
+                reason="Charity Commission entity - not a Companies House "
+                       "company, so it will never be in Inform Direct.",
+            ))
+            continue
+        if not row.company_number:
+            result.actions.append(Action(
+                kind=UNMATCHED, company_number="", company_name=row.company_name,
+                row_number=row.row_number,
+                reason="Planner row has no company number to match on.",
+            ))
+            continue
+
+        seen.add(row.company_number)
+        company = in_api.get(row.company_number)
+        if company is None:
+            result.actions.append(Action(
+                kind=NOT_IN_INFORMDIRECT,
+                company_number=row.company_number,
+                company_name=row.company_name,
+                row_number=row.row_number,
+                reason="In the planner but not linked to the Inform Direct "
+                       "account. Add it with `membership --add`.",
+                current={"planner_name": row.company_name},
+            ))
+            continue
+
+        result.matched += 1
+        if _names_differ(row.company_name, company.name):
+            result.actions.append(Action(
+                kind=NAME_MISMATCH,
+                company_number=row.company_number,
+                company_name=company.name,
+                row_number=row.row_number,
+                reason="Same company number, different name - check one of "
+                       "them is not a typo or a rename.",
+                current={"planner": row.company_name},
+                proposed={"inform_direct": company.name},
+            ))
+        else:
+            result.actions.append(Action(
+                kind=OK, company_number=row.company_number,
+                company_name=company.name, row_number=row.row_number,
+                reason="Linked, names agree.",
+            ))
+
+    for number, company in in_api.items():
+        if number not in seen:
+            result.actions.append(Action(
+                kind=NOT_IN_PLANNER,
+                company_number=number,
+                company_name=company.name,
+                reason="Linked in Inform Direct but absent from the planner. "
+                       "A former client, or a missing planner row.",
+            ))
+
+    result.actions.sort(key=lambda a: (a.kind, a.company_number))
+    return result
+
+
+def _names_differ(left, right):
+    """True only for a real difference, ignoring case and company suffixes."""
+    return _name_key(left) != _name_key(right) and bool(left) and bool(right)
+
+
+_NAME_NOISE = re.compile(
+    r"\b(limited|ltd|plc|llp|lp|company|co|the|uk)\b|[^a-z0-9]", re.I)
+
+
+def _name_key(value):
+    return _NAME_NOISE.sub("", str(value or "").lower())

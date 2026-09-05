@@ -35,11 +35,7 @@ class Portfolio:
             response = self.client.call("get_company", path_params={"company_id": company_id})
         except NotFoundError:
             return self.find_by_number(company_id)
-        payload = response.json()
-        if isinstance(payload, dict):
-            inner = payload.get("company") or payload.get("data")
-            if isinstance(inner, dict):
-                payload = inner
+        payload = _unwrap(response.json())
         return Company.from_api(payload) if payload else None
 
     def find_by_number(self, company_number):
@@ -55,23 +51,28 @@ class Portfolio:
 
     # -- membership -------------------------------------------------------- #
 
-    def add_company(self, company_number, *, auth_code=None, extra=None):
-        """Link a company to the account.
+    def add_company(self, company_number, *, extra=None):
+        """Link one company to the account.
 
-        `auth_code` is the Companies House authentication code, which Inform
-        Direct needs before it can act for a company.
+        Confirmed against the live API: POST /companies/add with
+        {"CompanyNumber": "..."}. One company per call - a payload carrying a
+        list is refused with 429 ("not meant for bulk uploading"), so callers
+        adding several must loop and pace themselves.
         """
-        body = {"companyNumber": clean_company_number(company_number)}
-        if auth_code:
-            body["authenticationCode"] = auth_code
+        body = {"CompanyNumber": clean_company_number(company_number)}
         if extra:
             body.update(extra)
         response = self.client.call("add_company", json_body=body)
-        payload = response.json()
-        return Company.from_api(payload) if isinstance(payload, dict) else None
+        payload = _unwrap(response.json())
+        return Company.from_api(payload) if payload else None
 
     def remove_company(self, company):
-        """Unlink a company no longer in use. Returns True on success."""
+        """Unlink a company. The endpoint has not been located yet.
+
+        Every candidate path answers 405 with "allow: GET"; see `_unresolved`
+        in config/endpoints.json. Add the operation to the map once Inform
+        Direct confirm it and this starts working unchanged.
+        """
         self.client.call("remove_company",
                          path_params={"company_id": _id_of(company)})
         return True
@@ -138,6 +139,23 @@ class Portfolio:
             except EndpointNotConfigured as exc:
                 view["unavailable"][key] = str(exc)
         return view
+
+
+def _unwrap(payload):
+    """Pull the single record out of whatever envelope it arrived in.
+
+    The live API answers GET /companies/{n} with the same {"Companies": [...]}
+    envelope it uses for the list, so a detail fetch has to be unwrapped too.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    for key in ("Companies", "companies", "company", "data", "items", "results"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value[0] if value else None
+        if isinstance(value, dict):
+            return value
+    return payload
 
 
 def _id_of(company):

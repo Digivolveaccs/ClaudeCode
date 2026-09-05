@@ -28,16 +28,23 @@ EXIT_EXCEPTIONS = 2
 
 SAMPLE_SIZE = 25
 
-# (label, Company attribute, is it required for the planner feed)
+# The Add company endpoint refuses bulk use (429), so calls are paced.
+ADD_COMPANY_PAUSE = 2.0
+
+OK_KIND = "ok"
+
+# (label, Company attribute, expectation)
+#   "supplied"  - the API returns it, and its absence is a real problem
+#   "absent"    - confirmed against the live API as not returned at all
 FIELD_CHECKS = (
-    ("company number", "company_number", True),
-    ("company name", "name", True),
-    ("status", "status", True),
-    ("next accounts made up to", "accounts_next_made_up_to", True),
-    ("accounts due date", "accounts_due", True),
-    ("last accounts made up to", "accounts_last_made_up_to", False),
-    ("confirmation statement due", "confirmation_due", False),
-    ("incorporation date", "incorporation_date", False),
+    ("company number", "company_number", "supplied"),
+    ("company name", "name", "supplied"),
+    ("status", "status", "absent"),
+    ("next accounts made up to", "accounts_next_made_up_to", "absent"),
+    ("accounts due date", "accounts_due", "absent"),
+    ("last accounts made up to", "accounts_last_made_up_to", "absent"),
+    ("confirmation statement due", "confirmation_due", "absent"),
+    ("incorporation date", "incorporation_date", "absent"),
 )
 
 
@@ -95,12 +102,27 @@ def build_parser():
     verify.add_argument("--company-number",
                         help="a company to add then remove (required with --confirm)")
     verify.add_argument("--auth-code",
-                        help="Companies House authentication code for that company")
+                        help="(unused - the live Add company endpoint takes only "
+                             "CompanyNumber; kept so older commands still parse)")
     verify.add_argument("--confirm", action="store_true",
                         help="actually run Add company and Remove company; without "
                              "it only the read-only endpoints are exercised")
     verify.add_argument("--keep", action="store_true",
                         help="skip Remove company, leaving the added company linked")
+
+    member = sub.add_parser(
+        "membership",
+        help="compare the Inform Direct portfolio against the planner's companies")
+    member.add_argument("--planner", required=True, help="planner rows CSV")
+    member.add_argument("--out", help="write the full report to this CSV")
+    member.add_argument("--json", action="store_true", dest="as_json")
+    member.add_argument("--add", action="store_true",
+                        help="link the companies that are missing from Inform "
+                             "Direct (needs --confirm)")
+    member.add_argument("--confirm", action="store_true",
+                        help="actually perform the additions")
+    member.add_argument("--limit", type=int, default=25,
+                        help="most companies to add in one run (default 25)")
 
     rec = sub.add_parser("reconcile", help="compare registry against planner rows")
     rec.add_argument("--planner", required=True, help="planner rows CSV")
@@ -172,6 +194,8 @@ def _dispatch(args):
         return _cmd_authtest(args)
     if args.command == "verify":
         return _cmd_verify(args)
+    if args.command == "membership":
+        return _cmd_membership(args)
     if args.command == "reconcile":
         return _cmd_reconcile(args)
     return EXIT_ERROR
@@ -228,25 +252,37 @@ def _cmd_check(args):
                   f"{company.name[:38]:<38} due {company.accounts_due or '-'}")
 
     print("\nfield coverage across the sample:")
-    missing_critical = []
-    for label, attr, critical in FIELD_CHECKS:
+    missing_supplied = []
+    unexpectedly_present = []
+    for label, attr, expectation in FIELD_CHECKS:
         present = sum(1 for c in sample if getattr(c, attr, None) not in (None, ""))
-        mark = "ok  " if present == len(sample) else ("some" if present else "NONE")
-        flag = " (needed by the planner)" if critical else ""
-        print(f"  [{mark}] {label:<32} {present}/{len(sample)}{flag}")
-        if critical and not present:
-            missing_critical.append(label)
+        mark = "ok  " if present == len(sample) else ("some" if present else "none")
+        note = "" if expectation == "supplied" else "  (not returned by this API)"
+        print(f"  [{mark}] {label:<32} {present}/{len(sample)}{note}")
+        if expectation == "supplied" and not present:
+            missing_supplied.append(label)
+        if expectation == "absent" and present:
+            unexpectedly_present.append(label)
 
-    if missing_critical:
-        print("\nThe API returned nothing for: " + ", ".join(missing_critical) + ".")
-        print("Either those fields are not part of 'high-level company details',")
-        print("or they are named something the parser does not recognise yet.")
-        print("Run `companies --json <file>` and look at a company's `raw` payload:")
-        print("if the data is there under another name, add that name to the")
-        print("aliases in informdirect/models.py and it will start mapping.")
+    if unexpectedly_present:
+        print("\nGood news - the API returned fields it was not expected to: "
+              + ", ".join(unexpectedly_present) + ".")
+        print("That changes what the planner can do. Tell Claude, and the")
+        print("deadline reconciliation can be pointed at the API after all.")
+        return EXIT_OK
+
+    if missing_supplied:
+        print("\nThe API returned nothing for: " + ", ".join(missing_supplied) + ".")
+        print("Those are fields it does normally supply, so something is wrong -")
+        print("run `diagnose` to see the raw payload.")
         return EXIT_EXCEPTIONS
 
-    print("\nEverything the planner feed and reconciliation need is present.")
+    print("\nWorking as expected. Note what that means:")
+    print("  the API supplies a company number, a name and a portal link, and")
+    print("  nothing else - no status, year end, deadline or confirmation date.")
+    print("  So it can answer WHICH companies are linked (`membership`), but it")
+    print("  cannot drive the deadline feed. That still needs the portfolio")
+    print("  export. See the README.")
     return EXIT_OK
 
 
@@ -578,8 +614,7 @@ def _cmd_verify(args):
     if args.confirm:
         def do_add():
             nonlocal added
-            added = portfolio.add_company(args.company_number,
-                                          auth_code=args.auth_code)
+            added = portfolio.add_company(args.company_number)
             return f"linked {args.company_number}"
         step("Add company", do_add)
     else:
@@ -599,9 +634,14 @@ def _cmd_verify(args):
         step("Get company", None, skipped="no company number to look up")
 
     if args.confirm and not args.keep:
-        step("Remove company",
-             lambda: f"unlinked {args.company_number}"
-             if portfolio.remove_company(args.company_number) else "")
+        if not portfolio.client.endpoints.has("remove_company"):
+            step("Remove company", None,
+                 skipped="endpoint not located - see _unresolved in "
+                         "config/endpoints.json")
+        else:
+            step("Remove company",
+                 lambda: f"unlinked {args.company_number}"
+                 if portfolio.remove_company(args.company_number) else "")
     elif args.keep:
         step("Remove company", None, skipped="--keep was passed")
     else:
@@ -623,13 +663,84 @@ def _cmd_verify(args):
               "production key, so re-run with --confirm against sandbox.")
         return EXIT_EXCEPTIONS
 
-    print("\nAll four endpoints returned successful authenticated responses.")
+    print("\nEvery endpoint exercised returned a successful authenticated "
+          "response.")
     print("To request production access, email support@informdirect.co.uk with:")
     print("  - your organisation name")
     print(f"  - last 6 of the sandbox key used here: "
           f"...{client.settings.api_key[-6:] if client.settings.api_key else '??????'}")
     print("  - last 6 of the production key you want activated")
     return EXIT_OK
+
+
+def _cmd_membership(args):
+    """Which planner companies are linked to Inform Direct, and which are not.
+
+    The API returns a company number, a name and a portal link - nothing else -
+    so it cannot answer deadline questions. Membership is what it can answer,
+    and it is worth answering: a client missing from the portfolio is one
+    nobody is filing for.
+    """
+    import time
+
+    from .reconcile import NOT_IN_INFORMDIRECT, reconcile_membership
+
+    rows = load_planner_csv(args.planner)
+    portfolio = _portfolio(args)
+    companies = portfolio.companies()
+    result = reconcile_membership(companies, rows)
+
+    if args.as_json:
+        print(json.dumps({
+            "summary": {"in_inform_direct": result.registry_count,
+                        "planner_rows": result.row_count,
+                        "matched": result.matched,
+                        "counts": result.counts()},
+            "actions": [a.as_dict() for a in result.actions],
+        }, indent=2))
+    else:
+        print(f"in Inform Direct : {result.registry_count}")
+        print(f"planner rows     : {result.row_count}")
+        print(f"linked and agreed: {result.matched}")
+        for kind, count in result.counts().items():
+            print(f"{kind:<17}: {count}")
+        for action in result.actions:
+            if action.kind == OK_KIND:
+                continue
+            print(f"\n  [{action.kind}] {action.company_number} "
+                  f"{action.company_name[:40]}")
+            print(f"      {action.reason}")
+
+    missing = result.of_kind(NOT_IN_INFORMDIRECT)
+    if args.add and missing:
+        if not args.confirm:
+            print(f"\n{len(missing)} company(ies) would be linked. Re-run with "
+                  "--confirm to do it.")
+        else:
+            print(f"\nLinking {min(len(missing), args.limit)} of "
+                  f"{len(missing)} company(ies)...")
+            added = failed = 0
+            for action in missing[:args.limit]:
+                try:
+                    portfolio.add_company(action.company_number)
+                    added += 1
+                    print(f"  added   {action.company_number} "
+                          f"{action.company_name[:40]}")
+                except errors.InformDirectError as exc:
+                    failed += 1
+                    print(f"  FAILED  {action.company_number}: {exc}")
+                    if isinstance(exc, errors.RateLimitError):
+                        print("  stopping - the API is rate limiting; it refuses "
+                              "bulk use. Try again later or in smaller runs.")
+                        break
+                # The add endpoint refuses bulk use, so pace the calls.
+                time.sleep(ADD_COMPANY_PAUSE)
+            print(f"\nadded {added}, failed {failed}")
+
+    if args.out:
+        print(f"\nreport -> {write_report_csv(result, args.out)}")
+
+    return EXIT_EXCEPTIONS if result.exceptions or missing else EXIT_OK
 
 
 def _cmd_reconcile(args):

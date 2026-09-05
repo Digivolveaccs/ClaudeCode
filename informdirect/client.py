@@ -205,8 +205,11 @@ def extract_items(payload):
         return payload
     if not isinstance(payload, dict):
         return []
+    # Keys are matched case-insensitively: the live API wraps its results in
+    # "Companies", not "companies".
+    lowered = {str(k).lower(): v for k, v in payload.items()}
     for key in ITEM_KEYS:
-        value = payload.get(key)
+        value = lowered.get(key)
         if isinstance(value, list):
             return value
     lists = [v for v in payload.values() if isinstance(v, list)]

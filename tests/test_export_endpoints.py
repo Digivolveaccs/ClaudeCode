@@ -69,13 +69,21 @@ class ExportTest(unittest.TestCase):
 
 
 class EndpointMapTest(unittest.TestCase):
-    def test_shipped_map_declares_the_documented_operations(self):
+    def test_shipped_map_declares_the_confirmed_operations(self):
         endpoints = EndpointMap.load(REPO_ROOT / "config" / "endpoints.json")
-        for name in ("list_companies", "get_company", "add_company",
-                     "remove_company"):
+        for name in ("list_companies", "get_company", "add_company"):
             self.assertTrue(endpoints.has(name), name)
-        self.assertTrue(endpoints.is_provisional,
-                        "shipped paths are unconfirmed and must say so")
+        self.assertFalse(endpoints.is_provisional,
+                         "paths were verified against the live API")
+        self.assertEqual(endpoints.resolve("add_company"),
+                         ("POST", "/companies/add"))
+        self.assertEqual(endpoints.resolve("get_company", company_id="01234567"),
+                         ("GET", "/companies/01234567"))
+
+    def test_remove_company_is_parked_as_unresolved(self):
+        raw = json.loads((REPO_ROOT / "config" / "endpoints.json").read_text())
+        self.assertIn("remove_company", raw["_unresolved"])
+        self.assertNotIn("remove_company", raw["operations"])
 
     def test_officers_and_shareholders_are_parked_not_silently_wired_up(self):
         raw = json.loads((REPO_ROOT / "config" / "endpoints.json").read_text())

@@ -1,65 +1,79 @@
 # Inform Direct API client
 
-Pulls company registry data (year ends, filing deadlines, officers, shareholders)
-out of Inform Direct over its API, so the **Limited Companies Tracker / planner**
-and **job reconciliation** stop depending on someone remembering to download a
-CSV from the portfolio screen.
+Client for Inform Direct's Integration API, built for the **Limited Companies
+Tracker / planner** and **job reconciliation**.
 
-Two jobs it does:
+The honest headline: **the API turned out to carry no dates**, so it cannot
+replace the portfolio CSV export for filing deadlines. What it can do is answer
+which client companies are actually linked to the Inform Direct account, and
+link the ones that are missing. See [what this API can and cannot do](#what-this-api-can-and-cannot-do).
 
-1. **Registry feed** — writes the same `inform-direct-companies-<date>.csv` the
-   tracker already reads from `Work Planners/Limited Companies Tracker/state/inform direct/`,
-   straight from the API.
-2. **Job reconciliation** — compares that registry against the planner's rows and
-   tells you exactly which rows to snap to the registry, which to mark submitted,
-   which to create, and which to put in front of a human.
+So there are two jobs here:
+
+1. **Membership reconciliation** (works off the API) — which planner companies
+   are in Inform Direct, which are not, and linking the missing ones.
+2. **Deadline reconciliation** (works off the portfolio export) — compares a
+   registry snapshot against the planner's rows and says which rows to snap to
+   the registry, which to mark submitted, which to create, and which need a
+   human. Written, tested, and ready for whenever the dates can be sourced.
 
 Standard library only. No `pip install` needed to run it.
 
 ---
 
-## Confirmed against the live API
+## What this API can and cannot do
+
+Verified against the live sandbox, not inferred from documentation.
+
+**A company record is three fields:**
+
+```json
+{"CompanyNumber": "01234567", "Name": "SANDBOX ONE LIMITED", "PublicUrl": "/c/abc"}
+```
+
+That is everything. No status, no accounts year end, no filing deadline, no
+confirmation statement date, no incorporation date. There are no officer,
+shareholder, filing or accounts endpoints — all confirmed 404.
+
+| Wanted | Possible? | |
+|---|---|---|
+| Registry feed for the Limited Companies Tracker | **No** | the API has no dates to feed it |
+| Deadline / job reconciliation | **No** | same reason |
+| SA director & close-company check | **No** | no officers or shareholders endpoint |
+| **Which companies are linked to the account** | **Yes** | `membership` |
+| **Linking a new client company** | **Yes** | `membership --add`, or `add_company()` |
+
+So the portfolio CSV export stays the source for deadlines. What this replaces
+is the manual cross-check of *which* client companies are actually in Inform
+Direct — a client missing from the portfolio is one nobody is filing for, and
+that is now one command.
+
+### Confirmed endpoints
 
 | | |
 |---|---|
-| Sandbox base URL | `https://sandbox-api.informdirect.co.uk` |
-| Production base URL | `https://api.informdirect.co.uk` |
-| Auth request | `POST {base_url}/authenticate` with `{"apiKey": "..."}` |
-| Auth response | `{"AccessToken": "<JWT>", "RefreshToken": "..."}` |
-| Access token life | 15 minutes; `/refresh` on a 401, rotating both tokens |
-| Request auth | `Authorization: Bearer {AccessToken}` |
-| Operations | Get companies, Get company, Add company, Remove company |
+| Sandbox | `https://sandbox-api.informdirect.co.uk` |
+| Production | `https://api.informdirect.co.uk` (401s a sandbox key) |
+| Auth | `POST /authenticate` `{"apiKey": "..."}` → `{"AccessToken", "RefreshToken"}` |
+| Token life | 15 minutes; `Authorization: Bearer <token>`; `/refresh` on a 401, rotating both |
+| Get companies | `GET /companies` → `{"Companies": [ ... ]}` |
+| Get company | `GET /companies/{companyNumber}` → the same envelope, one entry |
+| Add company | `POST /companies/add` `{"CompanyNumber": "..."}` — **one at a time** |
+| Remove company | **not located** — see below |
 
-The host and the key have to match: the production host answers a sandbox key
-with 401, which is how the sandbox host was found. Response field names come
-back PascalCase (`AccessToken`, not `access_token`); the parser matches field
-names case- and punctuation-insensitively, so both work.
+The company number must be the full 8 characters; an unpadded one is rejected
+with `400 The company number is invalid.` The client zero-pads automatically.
 
-**Still unconfirmed**
+`POST /companies/add` refuses bulk payloads with
+`429 "This end point is not meant for bulk uploading"`, so `membership --add`
+paces its calls and stops on a 429.
 
-- The literal paths for the four company operations, and the request body for
-  Add company. `config/endpoints.json` is marked `"_status": "provisional"`
-  until `fetch_spec` confirms them.
-- Whether "high-level company details" includes the **accounts year end and
-  filing deadline** — the thing the planner feed and reconciliation run on.
-  `check` answers this in one command:
-
-```
-field coverage across the sample:
-  [ok  ] company number                   25/25 (needed by the planner)
-  [NONE] accounts due date                 0/25 (needed by the planner)
-```
-
-If those come back empty it is usually a naming mismatch, not an absent
-feature — `companies --json` dumps each raw payload, and adding the real name to
-the aliases in `models.py` makes it map.
-
-**Officers, shareholders and filing history are not in the API.** The SA
-director / close-company check cannot come off the browser. That code is written
-and tested; the operations sit parked in `config/endpoints.json` under
-`_not_offered_by_the_api`, and moving them into `operations` is all it would take
-if a later version adds them. Until then `close_company_view` returns `None` for
-them (as opposed to `[]`, which would mean "the API says there are none").
+**Remove company is unresolved.** Every candidate path — `DELETE /companies/{n}`,
+`POST /companies/remove`, `/delete`, `/unlink` and others — answers `405` with
+`allow: GET`. Probing stopped once the add endpoint started rate-limiting, to
+avoid getting the key throttled. It is one question for Inform Direct support,
+or one line off their docs page; drop the answer into `config/endpoints.json`
+and `remove_company()` works unchanged.
 
 ## Running it without sitting at the machine
 
@@ -248,22 +262,52 @@ validate the sandbox calls before enabling it.
 
 ## Using it
 
-### Registry feed for the planner
+### Company list export
+
+Writes the tracker's feed CSV shape. **The date columns will be empty** — the
+API does not supply them — so this is useful as a company list, not as the
+deadline feed.
 
 ```bash
 python3 -m informdirect companies \
   --out "/path/to/Work Planners/Limited Companies Tracker/state/inform direct/"
 ```
 
-Given a directory it writes a dated file, which is exactly what the tracker's
-daily run picks up (newest file wins). Given a filename it writes that file.
-`--json` also saves a full snapshot including each company's raw API payload,
-which is what you want when a field looks wrong.
+Given a directory it writes a dated file; given a filename it writes that file.
+`--json` also saves a full snapshot including each company's raw API payload.
 
-Set it on a schedule and the tracker's "warn if the feed is >14 days old" check
-never fires again.
+Do **not** point the tracker's `state/inform direct/` folder at this — the
+tracker would read blank deadlines as authoritative. Keep using the manual
+portfolio export for that folder.
 
-### Job reconciliation
+### Membership — which companies are linked
+
+```bash
+python3 -m informdirect membership --planner planner-rows.csv --out out/report.csv
+```
+
+Compares the Inform Direct portfolio against your planner's companies and
+reports both directions: rows missing from Inform Direct, companies linked but
+absent from the planner, and name mismatches on the same number. Charity rows
+are recognised and never expected in the portfolio. Company suffixes and case
+are ignored when comparing names, so `Sandbox One Ltd` matches
+`SANDBOX ONE LIMITED`.
+
+Add the missing ones:
+
+```bash
+python3 -m informdirect membership --planner rows.csv --add --confirm --limit 25
+```
+
+Without `--confirm` it only says what it would do. Calls are paced and stop on a
+rate limit.
+
+### Job reconciliation (needs the portfolio export, not the API)
+
+The API cannot supply deadlines, so this reads a registry snapshot from the
+manual portfolio export. Everything below works — it just needs
+`--snapshot` rather than a live call.
+
 
 ```bash
 python3 -m informdirect reconcile \
@@ -360,4 +404,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-196 tests, stdlib `unittest`, no network and no pip install.
+218 tests, stdlib `unittest`, no network and no pip install.
