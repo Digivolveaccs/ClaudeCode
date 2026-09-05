@@ -284,3 +284,71 @@ class HostProbeCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("This one authenticated", output)
         self.assertIn("sandbox-api.informdirect.co.uk", output)
+
+
+class TwoPhaseProbeTest(unittest.TestCase):
+    """A host that does not resolve must cost one attempt, not seven."""
+
+    def _shape(self):
+        return next(a for a in authprobe.build_attempts(URL, KEY)
+                    if a.kind == ("json", "apiKey"))
+
+    def test_dead_hosts_are_tried_once_each(self):
+        calls = []
+
+        def handler(method, url, headers=None, body=None):
+            calls.append(url)
+            raise OSError("nodename nor servname provided")
+
+        hosts = ("https://a.example.com", "https://b.example.com")
+        paths = ("/authenticate", "/v1/authenticate", "/api/authenticate")
+        authprobe.probe_environments(
+            KEY, self._shape(), hosts=hosts, paths=paths,
+            transport=FakeTransport(handler=handler))
+        self.assertEqual(len(calls), 2, calls)
+        self.assertTrue(all(u.endswith("/authenticate") for u in calls))
+
+    def test_a_live_host_gets_the_remaining_paths(self):
+        calls = []
+
+        def handler(method, url, headers=None, body=None):
+            calls.append(url)
+            if url.startswith("https://b."):
+                return json_response({}, status=401)
+            raise OSError("no such host")
+
+        hosts = ("https://a.example.com", "https://b.example.com")
+        paths = ("/authenticate", "/v1/authenticate")
+        authprobe.probe_environments(
+            KEY, self._shape(), hosts=hosts, paths=paths,
+            transport=FakeTransport(handler=handler))
+        self.assertEqual(calls, [
+            "https://a.example.com/authenticate",
+            "https://b.example.com/authenticate",
+            "https://b.example.com/v1/authenticate",
+        ])
+
+    def test_probing_stops_the_moment_something_authenticates(self):
+        calls = []
+
+        def handler(method, url, headers=None, body=None):
+            calls.append(url)
+            return json_response({"accessToken": "a1"})
+
+        results = authprobe.probe_environments(
+            KEY, self._shape(),
+            hosts=("https://a.example.com", "https://b.example.com"),
+            paths=("/authenticate", "/v1/authenticate"),
+            transport=FakeTransport(handler=handler))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(results[-1].ok)
+
+    def test_each_result_is_reported_as_it_lands(self):
+        seen = []
+        authprobe.probe_environments(
+            KEY, self._shape(), hosts=("https://a.example.com",),
+            paths=("/authenticate",),
+            transport=FakeTransport(handler=lambda *a: json_response({}, 401)),
+            on_host=seen.append)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0].status, 401)

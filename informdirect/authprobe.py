@@ -190,20 +190,70 @@ def analyse(attempts):
     return {"verdict": "no_shape_understood", "shape": None}
 
 
+def _attempt_for(url, api_key, shape, user_agent, label):
+    built = build_attempts(url, api_key, user_agent)
+    match = next((a for a in built if a.kind == shape.kind), None)
+    if match is not None:
+        match.label = label
+    return match
+
+
 def build_environment_attempts(api_key, shape, user_agent="informdirect-authprobe",
                                hosts=HOST_CANDIDATES, paths=PATH_CANDIDATES):
     """One attempt per host+path, all using the shape that got understood."""
     attempts = []
     for host in hosts:
         for path in paths:
-            url = host.rstrip("/") + path
-            built = build_attempts(url, api_key, user_agent)
-            match = next((a for a in built if a.kind == shape.kind), None)
-            if match is None:
-                continue
-            match.label = f"{host.split('//')[1]}{path}"
-            attempts.append(match)
+            attempt = _attempt_for(host.rstrip("/") + path, api_key, shape,
+                                   user_agent, f"{host.split('//')[1]}{path}")
+            if attempt is not None:
+                attempts.append(attempt)
     return attempts
+
+
+def probe_environments(api_key, shape, user_agent="informdirect-authprobe",
+                       hosts=HOST_CANDIDATES, paths=PATH_CANDIDATES,
+                       transport=None, timeout=10.0, on_host=None):
+    """Find the host that accepts the key, in two phases.
+
+    Trying every host against every path is a slow way to learn that six of the
+    hosts do not exist - a name that does not resolve can hang for the full
+    timeout. So each host is tried once on the first path, and only hosts that
+    actually answered are worth the remaining paths.
+    """
+    transport = transport or UrllibTransport()
+    first_path, rest = paths[0], paths[1:]
+    results = []
+    live_hosts = []
+
+    for host in hosts:
+        attempt = _attempt_for(host.rstrip("/") + first_path, api_key, shape,
+                               user_agent, f"{host.split('//')[1]}{first_path}")
+        if attempt is None:
+            continue
+        run([attempt], transport=transport, timeout=timeout)
+        results.append(attempt)
+        if on_host:
+            on_host(attempt)
+        if attempt.ok:
+            return results
+        if attempt.status is not None:
+            live_hosts.append(host)
+
+    for host in live_hosts:
+        for path in rest:
+            attempt = _attempt_for(host.rstrip("/") + path, api_key, shape,
+                                   user_agent, f"{host.split('//')[1]}{path}")
+            if attempt is None:
+                continue
+            run([attempt], transport=transport, timeout=timeout)
+            results.append(attempt)
+            if on_host:
+                on_host(attempt)
+            if attempt.ok:
+                return results
+
+    return results
 
 
 def _summarise(response, payload):

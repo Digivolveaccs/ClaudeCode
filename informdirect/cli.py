@@ -347,17 +347,15 @@ def _cmd_authtest(args):
         return EXIT_EXCEPTIONS
 
     print("\nTrying that shape against the likely sandbox hosts and paths...")
-    env_attempts = authprobe.run(
-        authprobe.build_environment_attempts(
-            settings.api_key, shape, settings.user_agent),
-        timeout=min(settings.timeout, 10.0),
+    print("(hosts that do not resolve are dropped after one try)\n")
+    env_attempts = authprobe.probe_environments(
+        settings.api_key, shape, settings.user_agent,
+        timeout=min(settings.timeout, 8.0),
+        on_host=lambda a: _print_attempts([a]),
     )
 
-    interesting = [a for a in env_attempts if a.ok or a.status in (401, 400, 403)]
-    if interesting:
-        _print_attempts(interesting)
-    else:
-        print("  (no host answered - they do not exist)")
+    if not any(a.status is not None for a in env_attempts):
+        print("\n  (no host answered - none of them exist)")
 
     working = [a for a in env_attempts if a.ok]
     if working:
