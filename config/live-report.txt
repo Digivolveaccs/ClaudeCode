@@ -1,5 +1,5 @@
 Inform Direct live report
-generated: 2026-09-05T18:26:47Z
+generated: 2026-09-05T18:28:23Z
 base_url : https://sandbox-api.informdirect.co.uk
 
 ===== 1. endpoint paths from the live spec (authenticated) =====
