@@ -3,6 +3,10 @@
 Last verified live against the sandbox: 5 September 2026.
 **All four operations confirmed working.**
 
+Verified read-only against **production: 8 September 2026** — the live key works
+and the portfolio holds **404 companies**. Output in
+[`config/production-check.txt`](config/production-check.txt).
+
 ## Confirmed endpoints
 
 | | |
@@ -51,16 +55,43 @@ removes). Last run:
 
 ## Production
 
-The live key was activated by Inform Direct on 8 September 2026.
+The live key was activated by Inform Direct on 8 September 2026, and **verified
+read-only the same day**.
 
 ```bash
 export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
 export INFORMDIRECT_API_KEY="<production key>"
-python3 -m informdirect check          # read-only
+python3 -m informdirect check --redact   # read-only; --redact withholds client names
 ```
 
 Host and key are the only difference. `check`, `companies`, `company`,
 `diagnose` and `membership` (without `--add`) are all read-only and safe there.
+
+### What the live run showed
+
+| | |
+|---|---|
+| Authenticate | works first time, same request shape as sandbox |
+| Portfolio size | **404 companies** — distinct numbers and distinct names both 404 too, so no duplicates and no repeated page |
+| Field coverage | company number and name on every record; status, next accounts made up to, accounts due date, last accounts made up to, confirmation statement due and incorporation date all absent |
+
+**No behavioural difference from the sandbox — only scale** (sandbox held 1
+company, production holds 404). Phase 2's richer company data has therefore not
+appeared, so both conclusions above stand unchanged: the deadline feed still
+needs the manual portfolio export, and the SA director / close-company check
+stays in the browser.
+
+Two things worth knowing when reading that output:
+
+- `check` prints `sampled 25`. That is the command's own sample cap
+  (`SAMPLE_SIZE` in `informdirect/cli.py`), **not** the portfolio total — the
+  404 was counted by iterating the full paginated list.
+- `config/production-check.txt` carries counts only. No client names, no company
+  numbers, and the key masked.
+
+The README says a web/cloud session cannot reach `api.informdirect.co.uk`
+because of the egress allowlist. That is no longer true of this environment —
+the host was reachable and both commands completed normally.
 
 **Anything that changes the portfolio is refused on production unless you pass
 `--live`:**
