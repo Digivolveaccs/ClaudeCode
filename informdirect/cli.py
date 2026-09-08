@@ -107,6 +107,9 @@ def build_parser():
     verify.add_argument("--confirm", action="store_true",
                         help="actually run Add company and Remove company; without "
                              "it only the read-only endpoints are exercised")
+    verify.add_argument("--live", action="store_true",
+                        help="permit the mutating steps against the production "
+                             "host (they are refused there otherwise)")
     verify.add_argument("--keep", action="store_true",
                         help="skip Remove company, leaving the added company linked")
 
@@ -124,6 +127,9 @@ def build_parser():
     member.add_argument("--auth-code",
                         help="Companies House authentication code to send with "
                              "each addition")
+    member.add_argument("--live", action="store_true",
+                        help="permit additions against the production host "
+                             "(refused there otherwise)")
     member.add_argument("--limit", type=int, default=25,
                         help="most companies to add in one run (default 25)")
 
@@ -167,6 +173,26 @@ def _settings(args):
     if getattr(args, "no_token_cache", False):
         overrides["cache_tokens"] = False
     return Settings.load(config_path=args.config, **overrides)
+
+
+def _require_live_ack(settings, what, acknowledged=False):
+    """Refuse to change a real portfolio without --live being passed.
+
+    Add and remove are not reversible in the sense that matters: removing a
+    company the practice files for, or adding one it does not, is a real change
+    to a live account. Sandbox needs no ceremony; production does.
+    """
+    if not settings.is_production or acknowledged:
+        return True
+    print(
+        f"\nRefusing to {what} against PRODUCTION ({settings.base_url}) "
+        "without --live.\n"
+        "  This changes the real Inform Direct portfolio.\n"
+        "  Re-run with --live if that is genuinely what you want, or point\n"
+        "  INFORMDIRECT_BASE_URL at https://sandbox-api.informdirect.co.uk.",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _portfolio(args):
@@ -230,6 +256,7 @@ def _cmd_check(args):
     portfolio = _portfolio(args)
     client = portfolio.client
     print(f"base url  : {client.settings.base_url}")
+    print(f"environment: {client.settings.environment_name()}")
     print(f"auth      : {client.auth.describe()}")
     if hasattr(client.auth, "token"):
         client.auth.token()
@@ -578,8 +605,14 @@ def _cmd_verify(args):
               file=sys.stderr)
         return EXIT_ERROR
 
+    settings = _settings(args)
+    if args.confirm and not _require_live_ack(
+            settings, "add and remove a company", args.live):
+        return EXIT_ERROR
+
     portfolio = _portfolio(args)
     client = portfolio.client
+    print(f"environment: {client.settings.environment_name()}")
     results = []
 
     def step(name, fn, *, skipped=None):
@@ -709,6 +742,10 @@ def _cmd_membership(args):
             print(f"      {action.reason}")
 
     missing = result.of_kind(NOT_IN_INFORMDIRECT)
+    if args.add and missing and args.confirm:
+        if not _require_live_ack(portfolio.client.settings,
+                                 f"link {len(missing)} company(ies)", args.live):
+            return EXIT_ERROR
     if args.add and missing:
         if not args.confirm:
             print(f"\n{len(missing)} company(ies) would be linked. Re-run with "

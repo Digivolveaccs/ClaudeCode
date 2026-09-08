@@ -335,3 +335,85 @@ class AlreadyLinkedMappingTest(unittest.TestCase):
         other = errors.from_response(422, "Some other validation problem")
         self.assertIsInstance(other, errors.BadRequestError)
         self.assertNotIsInstance(other, errors.AlreadyLinkedError)
+
+
+class ProductionGuardTest(unittest.TestCase):
+    """Mutating the live portfolio must not happen by accident."""
+
+    def test_host_classification(self):
+        cases = {
+            "https://api.informdirect.co.uk": True,
+            "https://sandbox-api.informdirect.co.uk": False,
+            "https://test-api.informdirect.co.uk": False,
+            "https://uat-api.informdirect.co.uk": False,
+            "https://api.example.com": False,
+            "http://localhost:8000": False,
+            "https://api.some-new-host.co.uk": True,   # unknown errs to protected
+        }
+        for url, expected in cases.items():
+            with self.subTest(url=url):
+                s = Settings.load(base_url=url, api_key="k")
+                self.assertEqual(s.is_production, expected, url)
+                self.assertEqual(s.environment_name(),
+                                 "PRODUCTION" if expected else "sandbox")
+
+    def _run(self, base_url, argv_extra):
+        from unittest import mock
+
+        from informdirect.cli import main
+
+        settings = Settings.load(base_url=base_url, auth_mode="api_key",
+                                 api_key="k", backoff_base=0.0)
+        posted = []
+
+        def handler(method, url, headers=None, body=None):
+            if method == "POST":
+                posted.append(json.loads(body))
+                return json_response({"Message": "added"}, status=201)
+            return json_response({"Companies": []})
+
+        client = Client(settings, transport=FakeTransport(handler=handler),
+                        auth=StubAuth(),
+                        endpoints=EndpointMap.from_dict(ENDPOINTS, source="test"),
+                        sleep=lambda _: None)
+        portfolio = Portfolio(client=client)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            planner = Path(tmp) / "p.csv"
+            planner.write_text("Company Number,Company Name\n05251849,Adoreum Ltd\n")
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+                with mock.patch("informdirect.cli._settings", return_value=settings):
+                    with mock.patch("informdirect.cli.ADD_COMPANY_PAUSE", 0):
+                        import contextlib
+                        with contextlib.redirect_stdout(out), \
+                             contextlib.redirect_stderr(err):
+                            code = main(["membership", "--planner", str(planner),
+                                         "--add", *argv_extra])
+            return code, out.getvalue() + err.getvalue(), posted
+
+    def test_production_additions_are_refused_without_live(self):
+        code, output, posted = self._run("https://api.informdirect.co.uk",
+                                         ["--confirm"])
+        self.assertEqual(code, 1)
+        self.assertEqual(posted, [], "nothing may be sent")
+        self.assertIn("Refusing to", output)
+        self.assertIn("PRODUCTION", output)
+        self.assertIn("--live", output)
+
+    def test_production_additions_proceed_with_live(self):
+        code, output, posted = self._run("https://api.informdirect.co.uk",
+                                         ["--confirm", "--live"])
+        self.assertEqual(len(posted), 1)
+
+    def test_sandbox_needs_no_ceremony(self):
+        code, output, posted = self._run(
+            "https://sandbox-api.informdirect.co.uk", ["--confirm"])
+        self.assertEqual(len(posted), 1)
+        self.assertNotIn("Refusing to", output)
+
+    def test_a_dry_run_is_allowed_on_production(self):
+        code, output, posted = self._run("https://api.informdirect.co.uk", [])
+        self.assertEqual(posted, [])
+        self.assertIn("would be linked", output)
+        self.assertNotIn("Refusing to", output)

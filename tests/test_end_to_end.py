@@ -515,3 +515,57 @@ class DiagnoseTest(unittest.TestCase):
             written = path.read_text()
             self.assertIn("accountsDueDate", written)
             self.assertIn("list endpoint", written)
+
+
+class VerifyProductionGuardTest(unittest.TestCase):
+    """verify --confirm adds and removes a company; not on production by accident."""
+
+    def _run(self, base_url, argv_extra):
+        import contextlib
+        from unittest import mock
+
+        from informdirect.cli import main
+
+        settings = Settings.load(base_url=base_url, auth_mode="api_key",
+                                 api_key="k", backoff_base=0.0)
+        calls = []
+
+        def handler(method, url, headers=None, body=None):
+            calls.append(method)
+            if method == "POST":
+                return json_response({"Message": "added"}, status=201)
+            if method == "PUT":
+                return json_response({"Message": "Company deleted."})
+            return routed(method, url, headers, body)
+
+        portfolio = make_portfolio()
+        portfolio.client.settings = settings
+        portfolio.client.transport = FakeTransport(handler=handler)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("informdirect.cli._portfolio", return_value=portfolio):
+            with mock.patch("informdirect.cli._settings", return_value=settings):
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    code = main(["verify", "--company-number", "05251849",
+                                 *argv_extra])
+        return code, out.getvalue() + err.getvalue(), calls
+
+    def test_refused_on_production_without_live(self):
+        code, output, calls = self._run("https://api.informdirect.co.uk",
+                                        ["--confirm"])
+        self.assertEqual(code, 1)
+        self.assertNotIn("POST", calls, "nothing may be added")
+        self.assertNotIn("PUT", calls, "nothing may be removed")
+        self.assertIn("--live", output)
+
+    def test_allowed_on_production_with_live(self):
+        code, output, calls = self._run("https://api.informdirect.co.uk",
+                                        ["--confirm", "--live"])
+        self.assertIn("POST", calls)
+        self.assertIn("PUT", calls)
+
+    def test_the_environment_is_named_in_the_output(self):
+        code, output, _ = self._run("https://api.informdirect.co.uk", [])
+        self.assertIn("PRODUCTION", output)
+        code, output, _ = self._run("https://sandbox-api.informdirect.co.uk", [])
+        self.assertIn("sandbox", output)

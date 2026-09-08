@@ -229,6 +229,14 @@ If one works it tells you exactly what to put in `config/settings.json`. If none
 do, the validation messages name the field the server actually wants. It only
 authenticates — nothing is added or removed.
 
+### 3c. Production safety
+
+Every command prints the environment it is talking to. Anything that changes the
+portfolio — `verify --confirm`, `membership --add --confirm` — is **refused on
+production unless you pass `--live`**. A host that is not recognisably a sandbox
+counts as production, so a new or mistyped host errs towards being protected.
+Read-only commands are unaffected.
+
 ### 4. Earn the production key
 
 Inform Direct only enable a production key once their technical team have seen
@@ -408,4 +416,4 @@ safely if it turns out the API ignores paging parameters altogether.
 ./run_tests.sh
 ```
 
-225 tests, stdlib `unittest`, no network and no pip install.
+233 tests, stdlib `unittest`, no network and no pip install.

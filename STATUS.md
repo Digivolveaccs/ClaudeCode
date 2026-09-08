@@ -49,15 +49,34 @@ removes). Last run:
   [pass] Remove company   unlinked 05251849
 ```
 
-## Switching to production
+## Production
+
+The live key was activated by Inform Direct on 8 September 2026.
 
 ```bash
 export INFORMDIRECT_BASE_URL="https://api.informdirect.co.uk"
 export INFORMDIRECT_API_KEY="<production key>"
-python3 -m informdirect check
+python3 -m informdirect check          # read-only
 ```
 
-Host and key are the only difference.
+Host and key are the only difference. `check`, `companies`, `company`,
+`diagnose` and `membership` (without `--add`) are all read-only and safe there.
+
+**Anything that changes the portfolio is refused on production unless you pass
+`--live`:**
+
+```
+Refusing to add and remove a company against PRODUCTION (...) without --live.
+  This changes the real Inform Direct portfolio.
+```
+
+That covers `verify --confirm` and `membership --add --confirm`. A host that is
+not recognisably a sandbox counts as production, so a new or mistyped host errs
+towards being protected. Every command now prints which environment it is
+talking to.
+
+Do not run `verify --confirm` against production casually — it adds and removes
+a real company from the live portfolio. Use sandbox for that.
 
 ## What this API cannot do, and why
 

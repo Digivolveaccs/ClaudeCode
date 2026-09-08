@@ -21,6 +21,13 @@ from .errors import ConfigError
 
 ENV_PREFIX = "INFORMDIRECT_"
 
+# Hosts that are recognisably not live client data. Anything else is treated as
+# production, so a new or mistyped host errs towards being protected.
+NON_PRODUCTION_MARKERS = (
+    "sandbox", "test", "uat", "staging", "dev", "localhost", "127.0.0.1",
+    "example", "invalid",
+)
+
 DEFAULT_CONFIG_PATHS = (
     Path("config/settings.json"),
     Path.home() / ".informdirect" / "config.json",
@@ -224,6 +231,24 @@ class Settings:
 
     def resolved_refresh_url(self):
         return self.refresh_url or (self.base_url + self.refresh_path)
+
+    @property
+    def is_production(self):
+        """True unless the host is recognisably a sandbox or test one.
+
+        Deliberately conservative: an unrecognised host counts as production,
+        so the mistake that gets caught is the dangerous one. Add and remove
+        change a real portfolio, so they check this before running.
+        """
+        from urllib.parse import urlparse
+
+        host = (urlparse(self.base_url).hostname or "").lower()
+        if not host:
+            return False
+        return not any(marker in host for marker in NON_PRODUCTION_MARKERS)
+
+    def environment_name(self):
+        return "PRODUCTION" if self.is_production else "sandbox"
 
     def redacted(self):
         """A dict safe to print or log - secrets replaced with a mask."""
