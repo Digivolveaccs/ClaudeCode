@@ -1,0 +1,132 @@
+Inform Direct — PRODUCTION read-only verification
+=================================================
+
+Date run     : 8 September 2026
+Host         : https://api.informdirect.co.uk  (PRODUCTION)
+Key          : production key activated by Inform Direct on 8 Sep 2026
+Scope        : READ-ONLY. Nothing was added, removed or otherwise mutated.
+               --live was never passed; verify --confirm and membership --add
+               were not run.
+Redaction    : client company names and numbers are deliberately withheld.
+               Counts only.
+
+
+1. python3 -m informdirect config
+---------------------------------
+
+{
+  "base_url": "https://api.informdirect.co.uk",
+  "token_url": "",
+  "auth_mode": "api_key_token",
+  "auth_path": "/authenticate",
+  "refresh_path": "/refresh",
+  "auth_url": "",
+  "refresh_url": "",
+  "api_key_field": "apiKey",
+  "refresh_token_field": "refreshToken",
+  "api_key_in": "body",
+  "access_token_ttl": 900.0,
+  "client_id": "",
+  "client_secret": "",
+  "scope": "",
+  "audience": "",
+  "token_auth_style": "auto",
+  "api_key": "<set, 64 chars>",
+  "api_key_header": "X-Api-Key",
+  "timeout": 30.0,
+  "max_retries": 4,
+  "backoff_base": 1.0,
+  "backoff_cap": 30.0,
+  "page_size": 100,
+  "user_agent": "digivolve-informdirect/1.0",
+  "endpoints_path": "/home/user/ClaudeCode/config/endpoints.json",
+  "token_cache_path": "/root/.informdirect/token-cache.json",
+  "cache_tokens": true,
+  "sources": [
+    "environment"
+  ]
+}
+
+settings look complete.
+endpoint map: /home/user/ClaudeCode/config/endpoints.json (status: confirmed)
+operations: add_company, get_company, list_companies, remove_company
+
+
+2. python3 -m informdirect check --redact
+-----------------------------------------
+
+base url  : https://api.informdirect.co.uk
+environment: PRODUCTION
+auth      : api_key_token auth_url=https://api.informdirect.co.uk/authenticate
+token     : obtained
+companies : reachable, sampled 25
+  (company details withheld - --redact)
+
+field coverage across the sample:
+  [ok  ] company number                   25/25
+  [ok  ] company name                     25/25
+  [none] status                           0/25  (not returned by this API)
+  [none] next accounts made up to         0/25  (not returned by this API)
+  [none] accounts due date                0/25  (not returned by this API)
+  [none] last accounts made up to         0/25  (not returned by this API)
+  [none] confirmation statement due       0/25  (not returned by this API)
+  [none] incorporation date               0/25  (not returned by this API)
+
+Working as expected. Note what that means:
+  the API supplies a company number, a name and a portal link, and
+  nothing else - no status, year end, deadline or confirmation date.
+  So it can answer WHICH companies are linked (`membership`), but it
+  cannot drive the deadline feed. That still needs the portfolio
+  export. See the README.
+
+
+3. Total companies in the live portfolio
+----------------------------------------
+
+  404 companies.
+
+`check` reports "sampled 25" because the check command caps its sample at
+SAMPLE_SIZE = 25 (informdirect/cli.py) - that is a sample, not the portfolio
+total. The total below was obtained by iterating the full paginated
+list_companies result read-only and counting; names and numbers were never
+written to disk.
+
+  total records returned  : 404
+  distinct company numbers: 404
+  distinct names          : 404
+
+Distinct counts equal the record count, so pagination is not repeating a page
+and there are no duplicate rows - 404 is a genuine portfolio total.
+
+
+Comparison with the sandbox behaviour in STATUS.md
+--------------------------------------------------
+
+No behavioural differences. Specifically:
+
+  - Authentication succeeded first time against the production host with the
+    production key, same shape as sandbox: POST /authenticate {"apiKey": ...}
+    returning an access token.
+  - Field coverage is identical to sandbox: company number and name present on
+    every record (25/25 in the sample); status, next accounts made up to,
+    accounts due date, last accounts made up to, confirmation statement due and
+    incorporation date all absent.
+  - So the Phase 2 richer company data has NOT appeared on production. The
+    conclusions in README.md and STATUS.md stand unchanged:
+      * the Limited Companies Tracker deadline feed still needs the manual
+        portfolio export - do not point state/inform direct/ at this client;
+      * the SA director / close-company check stays in the browser.
+  - The only difference of any kind is scale: sandbox held 1 company, production
+    holds 404.
+
+Note on environment: README.md records that web/cloud sessions could not reach
+api.informdirect.co.uk because of the egress allowlist. That is no longer the
+case for this environment - the host was reachable and both commands completed
+normally.
+
+
+Outstanding housekeeping (unchanged, from STATUS.md)
+-----------------------------------------------------
+
+  - Rotate the sandbox key (Account -> Manage API keys); the one used during
+    setup was shared in a chat transcript.
