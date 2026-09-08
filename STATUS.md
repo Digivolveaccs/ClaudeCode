@@ -73,7 +73,34 @@ Host and key are the only difference. `check`, `companies`, `company`,
 |---|---|
 | Authenticate | works first time, same request shape as sandbox |
 | Portfolio size | **404 companies** — distinct numbers and distinct names both 404 too, so no duplicates and no repeated page |
-| Field coverage | company number and name on every record; status, next accounts made up to, accounts due date, last accounts made up to, confirmation statement due and incorporation date all absent |
+| Field coverage | three fields and nothing else, on all 404 records (below) |
+
+### No deadlines are available live — checked across all 404 records
+
+The raw payload of **every** company in the live portfolio was inspected for
+field names. The complete set the API returns is:
+
+```
+  CompanyNumber   404/404
+  Name            404/404
+  PublicUrl       404/404
+```
+
+So `accounts due date`, `next accounts made up to`, `confirmation statement
+due`, `incorporation date` and `status` are not sparsely populated or blank —
+those keys are **absent from every record**. This is a settled fact about the
+live API, not an observation from a sample.
+
+Therefore, and until Phase 2 lands:
+
+- **the tracker's deadline feed cannot come from this API** — keep using the
+  manual portfolio export, and do not point `state/inform direct/` at this
+  client, or the tracker will read blank deadlines as authoritative;
+- **the SA director / close-company check stays in the browser.**
+
+What the API *is* good for is the membership question — which client companies
+are actually linked to the account (`membership`). A company missing from the
+portfolio is one nobody is filing for.
 
 **No behavioural difference from the sandbox — only scale** (sandbox held 1
 company, production holds 404). Phase 2's richer company data has therefore not

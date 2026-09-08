@@ -99,6 +99,25 @@ Distinct counts equal the record count, so pagination is not repeating a page
 and there are no duplicate rows - 404 is a genuine portfolio total.
 
 
+4. Field names across the WHOLE portfolio (not just the sample)
+---------------------------------------------------------------
+
+The 25-record sample above could not prove that no record anywhere carries a
+date. So the raw payload of all 404 companies was inspected for field NAMES
+(names and counts only - no values, no client data). The complete set:
+
+  CompanyNumber   404/404
+  Name            404/404
+  PublicUrl       404/404
+
+Nothing else is returned by any record. accounts due date, next accounts made
+up to, confirmation statement due, incorporation date and status are absent
+from every company in the live portfolio - not blank, not sparse, absent.
+
+Conclusion: the API cannot serve confirmation statement or accounts deadlines
+live. The manual portfolio export remains the only source for those.
+
+
 Comparison with the sandbox behaviour in STATUS.md
 --------------------------------------------------
 
